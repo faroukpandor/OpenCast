@@ -1,0 +1,28 @@
+name: Verify OpenCast
+on:
+  push:
+    branches: [main, 'arena/**']
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm run test:e2e
+      - run: npm run test:e2e:production
+      - run: npm audit
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-failures
+          path: test-results/
+          if-no-files-found: ignore

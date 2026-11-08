@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Device } from '../server/db.ts';
+import { Device } from '../types.ts';
 import { Cpu, HardDrive, Wifi, Tv, Terminal, CheckCircle2, ChevronRight } from 'lucide-react';
 
 interface DeviceCatalogProps {
@@ -28,11 +28,11 @@ export const DeviceCatalog: React.FC<DeviceCatalogProps> = ({
         <div>
           <h2 className="text-xl font-bold text-slate-900 dark:text-white">Streaming Hardware Profiles</h2>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-            Hardware architecture, memory topologies, and ADB debugging ports
+            Reference specifications and documented reports. Confirm your exact model and firmware.
           </p>
         </div>
 
-        <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800">
+        <div className="flex flex-wrap items-center gap-1 p-1 max-w-full bg-slate-100 dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800">
           {ecosystems.map((eco) => (
             <button
               key={eco}
@@ -52,10 +52,10 @@ export const DeviceCatalog: React.FC<DeviceCatalogProps> = ({
       {/* Grid of Devices */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
         {filtered.map((device) => (
-          <div
+          <button
             key={device.id}
-            onClick={() => onSelectDevice(device)}
-            className="group cursor-pointer rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/80 p-5 hover:border-slate-300 dark:hover:border-slate-700 hover:shadow-md transition-all flex flex-col justify-between"
+            onClick={() => onSelectDevice(device)} aria-label={`View issues for ${device.name}`}
+            className="group text-left cursor-pointer rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/80 p-5 hover:border-slate-300 dark:hover:border-slate-700 hover:shadow-md transition-all flex flex-col justify-between"
           >
             <div>
               {/* Device Header */}
@@ -63,7 +63,7 @@ export const DeviceCatalog: React.FC<DeviceCatalogProps> = ({
                 <span className="text-[11px] font-mono uppercase tracking-wide text-blue-600 dark:text-blue-400 font-semibold">
                   {device.ecosystem}
                 </span>
-                <span className="text-[11px] text-slate-400 font-mono">
+                <span className="text-[11px] text-slate-500 dark:text-slate-400 font-mono">
                   Rel: {device.release_date}
                 </span>
               </div>
@@ -87,7 +87,7 @@ export const DeviceCatalog: React.FC<DeviceCatalogProps> = ({
                 </div>
                 <div className="flex items-center gap-2 text-slate-600 dark:text-slate-400 font-mono text-[11px]">
                   <Terminal className="w-3.5 h-3.5 text-blue-500 shrink-0" />
-                  <span>ADB Port: {device.specs.adb_port > 0 ? device.specs.adb_port : 'Restricted (AirPlay)'}</span>
+                  <span>ADB Port: {device.specs.adb_port > 0 ? device.specs.adb_port : 'Not Android ADB'}</span>
                 </div>
               </div>
             </div>
@@ -98,10 +98,10 @@ export const DeviceCatalog: React.FC<DeviceCatalogProps> = ({
                 {device.issues_count || 0} documented issue{device.issues_count === 1 ? '' : 's'}
               </span>
               <span className="text-blue-600 dark:text-blue-400 font-medium group-hover:translate-x-0.5 transition-transform flex items-center gap-0.5">
-                Inspect Specs & Issues <ChevronRight className="w-3.5 h-3.5" />
+                View device issues <ChevronRight className="w-3.5 h-3.5" />
               </span>
             </div>
-          </div>
+          </button>
         ))}
       </div>
     </div>

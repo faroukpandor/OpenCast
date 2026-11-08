@@ -2,7 +2,15 @@ node_modules/
 build/
 dist/
 coverage/
+data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+test-results/
+playwright-report/
 .DS_Store
 *.log
 .env*
 !.env.example
+dist-server/
+.aistudio/

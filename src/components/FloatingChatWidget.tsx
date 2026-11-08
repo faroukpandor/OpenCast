@@ -1,4 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { searchCatalog, type CatalogSnapshot } from '../utils/catalog_search.ts';
+import { offlineStorage } from '../utils/offline_cache.ts';
 import { 
   MessageSquare, 
   X, 
@@ -16,7 +18,7 @@ import {
   Layers,
   Zap
 } from 'lucide-react';
-import { resolveFailProofAnswer } from '../utils/failproof_rag.ts';
+
 
 interface ChatMessage {
   id: string;
@@ -27,7 +29,7 @@ interface ChatMessage {
   timestamp: string;
 }
 
-export const FloatingChatWidget: React.FC = () => {
+export const FloatingChatWidget: React.FC<{ catalog: CatalogSnapshot }> = ({ catalog }) => {
   const [isOpen, setIsOpen] = useState<boolean>(false);
   const [input, setInput] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
@@ -36,9 +38,9 @@ export const FloatingChatWidget: React.FC = () => {
     {
       id: 'welcome',
       role: 'model',
-      text: "Hello! I am your **OpenCast Troubleshooting Copilot**.\n\nAsk me anything about streaming hardware specs, wireless ADB commands, 5-digit package shortcodes, custom launcher remaps, or lossless home theater audio passthrough.",
-      sources: ['OpenCast RAG Knowledge Base'],
-      isAiGenerated: true,
+      text: "Hello! I am your **OpenCast Troubleshooting Copilot**.\n\nSearch streaming hardware specs, ADB references, package links, and troubleshooting notes. Answers come only from this catalog; no paid AI service is used.",
+      sources: ['OpenCast reference catalog'],
+      isAiGenerated: false,
       timestamp: 'Just now'
     }
   ]);
@@ -47,7 +49,7 @@ export const FloatingChatWidget: React.FC = () => {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    messagesEndRef.current?.parentElement?.scrollTo({ top: messagesEndRef.current.parentElement.scrollHeight, behavior: 'smooth' });
   };
 
   useEffect(() => {
@@ -57,8 +59,8 @@ export const FloatingChatWidget: React.FC = () => {
     }
   }, [isOpen, messages]);
 
-  const handleCopy = (code: string) => {
-    navigator.clipboard.writeText(code);
+  const handleCopy = async (code: string) => {
+    try { await navigator.clipboard.writeText(code); } catch { return; }
     setCopiedCode(code);
     setTimeout(() => setCopiedCode(null), 2000);
   };
@@ -79,13 +81,13 @@ export const FloatingChatWidget: React.FC = () => {
     setLoading(true);
 
     try {
-      const historyPayload = messages.slice(-5).map(m => ({
+      const historyPayload = messages.filter(m => m.id !== 'welcome').slice(-6).map(m => ({
         role: m.role,
         text: m.text
       }));
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 4000);
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
 
       const res = await fetch('/api/rag/chat', {
         method: 'POST',
@@ -108,30 +110,23 @@ export const FloatingChatWidget: React.FC = () => {
         role: 'model',
         text: data.answer || 'No response returned from knowledge base.',
         sources: data.sources || ['OpenCast RAG Engine'],
-        isAiGenerated: data.isAiGenerated ?? true,
+        isAiGenerated: false,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       };
 
       setMessages(prev => [...prev, modelMsg]);
-    } catch (err: any) {
-      // Fail-proof instant client-side fallback leveraging 100% free local resources
-      const fallback = resolveFailProofAnswer(query);
-      const fallbackMsg: ChatMessage = {
-        id: `bot_fallback_${Date.now()}`,
-        role: 'model',
-        text: fallback.answer,
-        sources: [...fallback.sources, 'Fail-Proof Free Tier Engine'],
-        isAiGenerated: false,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      };
-      setMessages(prev => [...prev, fallbackMsg]);
+    } catch {
+      const cached = offlineStorage.getCatalog() || catalog;
+      const result = searchCatalog(query,cached);
+      const available = cached.devices.length || cached.issues.length;
+      setMessages(prev => [...prev, { id: `local_${Date.now()}`, role: 'model', text: available ? `### Search from the browser’s cached catalog\n\nThe server is unavailable. These results may be older than the live catalog.\n\n${result.answer}` : 'The server is unavailable and no catalog has been cached on this browser. Connect once to load references, then retry.', sources: available ? result.sources : [], isAiGenerated: false, timestamp: new Date().toLocaleTimeString() }]);
     } finally {
       setLoading(false);
     }
   };
 
   const quickPrompts = [
-    "How do I bypass FireOS 8 verification error?",
+    "FireOS 8 package verification reference",
     "How to install Projectivy Launcher without ads?",
     "What 5-digit shortcodes exist?",
     "How to fix TrueHD audio passthrough on Shield Pro?",
@@ -179,12 +174,13 @@ export const FloatingChatWidget: React.FC = () => {
         );
       }
 
-      // Format markdown bold and inline code
+      // Format headings, markdown bold, and inline code as React text (never HTML).
       const paragraphs = part.split('\n\n');
       return (
         <div key={index} className="space-y-1.5">
           {paragraphs.map((p, pIdx) => {
             if (!p.trim()) return null;
+            if (p.startsWith('### ')) return <h4 key={pIdx} className="font-bold text-sm leading-sn">{p.slice(4)}</h4>;
             return (
               <p key={pIdx} className="leading-relaxed">
                 {p.split(/(\*\*.*?\*\*|`.*?`)/g).map((sub, sIdx) => {
@@ -211,7 +207,7 @@ export const FloatingChatWidget: React.FC = () => {
         <button
           onClick={() => setIsOpen(true)}
           className="fixed bottom-5 right-5 z-40 group flex items-center gap-2.5 px-4 py-3 rounded-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow-xl shadow-blue-500/25 hover:shadow-blue-500/40 hover:scale-105 active:scale-95 transition-all duration-200"
-          aria-label="Open RAG Troubleshooting Chat"
+          aria-label="Open troubleshooting assistant"
         >
           <div className="relative">
             <Sparkles className="w-4 h-4 text-white animate-pulse" />
@@ -219,14 +215,14 @@ export const FloatingChatWidget: React.FC = () => {
           </div>
           <span className="text-xs font-bold tracking-tight">OpenCast Copilot</span>
           <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-white/20 text-blue-100 font-medium">
-            AI RAG
+            Local RAG
           </span>
         </button>
       )}
 
       {/* Floating Chat Window */}
       {isOpen && (
-        <div className="fixed bottom-4 sm:bottom-6 right-4 sm:right-6 z-50 w-[360px] sm:w-[420px] max-w-[calc(100vw-2rem)] h-[580px] max-h-[calc(100vh-5rem)] flex flex-col rounded-2xl border border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl shadow-2xl overflow-hidden animate-slideUp transition-all">
+        <div role="region" aria-label="OpenCast catalog assistant" className="fixed bottom-4 sm:bottom-6 right-4 sm:right-6 z-50 w-[360px] sm:w-[420px] max-w-[calc(100vw-2rem)] h-[580px] max-h-[calc(100vh-5rem)] flex flex-col rounded-2xl border border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl shadow-2xl overflow-hidden animate-slideUp transition-all">
           {/* Header */}
           <div className="px-4 py-3.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-950/80 flex items-center justify-between shrink-0">
             <div className="flex items-center gap-2.5">
@@ -239,7 +235,7 @@ export const FloatingChatWidget: React.FC = () => {
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
                 </h3>
                 <p className="text-[10px] text-slate-500 dark:text-slate-400 font-medium mt-0.5">
-                  Grounded in verified ADB & sideloading RAG
+                  Catalog search · verify device-specific guidance
                 </p>
               </div>
             </div>
@@ -247,14 +243,14 @@ export const FloatingChatWidget: React.FC = () => {
             <div className="flex items-center gap-1">
               <button
                 onClick={() => setMessages([messages[0]])}
-                title="Reset conversation"
+                title="Reset conversation" aria-label="Reset conversation"
                 className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
               </button>
               <button
                 onClick={() => setIsOpen(false)}
-                title="Minimize chat"
+                title="Minimize chat" aria-label="Minimize chat"
                 className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
               >
                 <ChevronDown className="w-4 h-4" />
@@ -342,7 +338,7 @@ export const FloatingChatWidget: React.FC = () => {
                   <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-bounce"></span>
                   <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-bounce [animation-delay:0.2s]"></span>
                   <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-bounce [animation-delay:0.4s]"></span>
-                  <span className="text-[11px] text-slate-400 ml-1">Searching RAG knowledge base...</span>
+                  <span className="text-[11px] text-slate-400 ml-1">Searching the reference catalog...</span>
                 </div>
               </div>
             )}
@@ -361,8 +357,10 @@ export const FloatingChatWidget: React.FC = () => {
             >
               <input
                 ref={inputRef}
+                aria-label="Ask the catalog"
                 type="text"
                 value={input}
+                maxLength={2000}
                 onChange={(e) => setInput(e.target.value)}
                 placeholder="Ask about ADB commands, shortcodes, launchers..."
                 className="flex-1 px-3.5 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-500"
@@ -379,9 +377,9 @@ export const FloatingChatWidget: React.FC = () => {
             <div className="mt-1.5 flex items-center justify-between text-[10px] text-slate-400 px-1 font-mono">
               <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                100% Free Resources
+                Free local knowledge search
               </span>
-              <span>Fail-Proof Fallback Active</span>
+              <span>Verify device-specific guidance</span>
             </div>
           </div>
         </div>

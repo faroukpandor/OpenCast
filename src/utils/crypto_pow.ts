@@ -1,38 +1,19 @@
-import { createHash } from 'node:crypto';
-
-/**
- * Validates whether a comment text combined with a nonce produces a SHA-256 hash
- * that satisfies the difficulty prefix (default: "000", requiring ~4096 attempts).
- */
-export function verifyProofOfWork(
-  commentText: string,
-  nonce: string,
-  requiredPrefix: string = '000'
-): { valid: boolean; hash: string } {
-  const payload = `${commentText}${nonce}`;
-  const hash = createHash('sha256').update(payload).digest('hex');
-  const valid = hash.startsWith(requiredPrefix);
-  return { valid, hash };
+// Isomorphic helpers. A challenge binds a nonce to one page and one submission.
+export function proofOfWorkPayload(challenge: string, pageSlug: string, content: string, nonce: string) {
+  return JSON.stringify([challenge, pageSlug, content, nonce]);
 }
-
-/**
- * Mines a valid Proof of Work nonce synchronously or with iteration limits.
- * Used for testing and client-side mining.
- */
-export function mineProofOfWorkSync(
-  commentText: string,
-  requiredPrefix: string = '000',
-  maxIterations: number = 200000
-): { nonce: string; hash: string; attempts: number } {
-  let attempts = 0;
-  while (attempts < maxIterations) {
-    const nonce = attempts.toString(36);
-    const payload = `${commentText}${nonce}`;
-    const hash = createHash('sha256').update(payload).digest('hex');
-    if (hash.startsWith(requiredPrefix)) {
-      return { nonce, hash, attempts: attempts + 1 };
-    }
-    attempts++;
+export async function sha256Hex(input: string | Uint8Array): Promise<string> {
+  const bytes = typeof input === 'string' ? new TextEncoder().encode(input) : input;
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes as BufferSource);
+  return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2,'0')).join('');
+}
+export async function mineProofOfWork(challenge: string, pageSlug: string, content: string, difficulty = '0000', signal?: AbortSignal, onProgress?: (attempts: number) => void) {
+  for (let attempt = 0; attempt < 2_000_000; attempt++) {
+    signal?.throwIfAborted();
+    const nonce = attempt.toString(36);
+    const hash = await sha256Hex(proofOfWorkPayload(challenge,pageSlug,content,nonce));
+    if (hash.startsWith(difficulty)) return { nonce, hash, attempts: attempt + 1 };
+    if (attempt % 100 === 0) { onProgress?.(attempt); await new Promise(r => setTimeout(r,0)); }
   }
-  throw new Error(`Failed to mine PoW within ${maxIterations} attempts`);
+  throw new Error('Proof-of-work limit reached. Please retry.');
 }

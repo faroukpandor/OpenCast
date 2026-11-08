@@ -1,285 +1,114 @@
-import React, { useState } from 'react';
-import { Terminal, Wifi, Usb, Play, CheckCircle2, AlertTriangle, ShieldCheck, Copy, Check, RotateCcw } from 'lucide-react';
-
-interface QuickScript {
-  name: string;
-  category: string;
-  command: string;
-  targetDevice: string;
-  outputMock: string[];
+import React, { useEffect, useRef, useState } from 'react';
+import { Terminal,Usb,Copy,Check,AlertTriangle,Play,Square } from 'lucide-react';
+import type { Adb, AdbDaemonConnection } from '@yume-chan/adb';
+import type { AdbDaemonWebUsbConnection } from '@yume-chan/adb-daemon-webusb';
+import { copyText } from '../utils/api.ts';
+const presets = [
+  { name:'Device identity',command:'getprop ro.product.model',note:'Read the model identifier.' },
+  { name:'Firmware version',command:'getprop ro.build.version.release',note:'Read the Android base version.' },
+  { name:'Storage usage',command:'df -h /data',note:'Read free space; no files are changed.' },
+  { name:'Third-party packages',command:'pm list packages -3',note:'List installed third-party package IDs.' },
+  { name:'Trim reclaimable cache',command:'pm trim-caches 1G',note:'Ask Android to reclaim up to 1 GB of cache. Review before running.' }
+];
+interface Reader { read(): Promise<{ done: boolean; value?: Uint8Array }>; cancel(): Promise<void>; releaseLock(): void; }
+interface Stream { getReader(): Reader; }
+function abortPromise(signal: AbortSignal) {
+  return new Promise<never>((_resolve,reject) => {
+    const abort = () => reject(signal.reason || new Error('Cancelled.'));
+    if (signal.aborted) abort(); else signal.addEventListener('abort',abort,{ once:true });
+  });
 }
-
 export const WebAdbStudio: React.FC = () => {
-  const [deviceIp, setDeviceIp] = useState<string>('192.168.1.145');
-  const [port, setPort] = useState<number>(5555);
-  const [isConnected, setIsConnected] = useState<boolean>(false);
-  const [customCommand, setCustomCommand] = useState<string>('');
-  const [terminalLogs, setTerminalLogs] = useState<string[]>([
-    'OpenCast WebADB Bridge v1.0.0 initialized.',
-    'Ready for wireless TCP/IP pairing on port 5555 or USB WebUSB connection.',
-    'Enter your streaming device IP (found in Settings -> My Fire TV / System -> About -> Network) and connect.'
-  ]);
-  const [copiedCmd, setCopiedCmd] = useState<string | null>(null);
-
-  const quickScripts: QuickScript[] = [
-    {
-      name: 'Bypass FireOS 8 Sideload Verification',
-      category: 'Fire TV',
-      targetDevice: 'Fire TV Stick 4K Max (2nd Gen)',
-      command: 'settings put global verifier_verify_adb_installs 0',
-      outputMock: [
-        '$ settings put global verifier_verify_adb_installs 0',
-        'Verification bypass: active. INSTALL_FAILED_VERIFICATION_FAILURE will no longer trigger.'
-      ]
-    },
-    {
-      name: 'Disable Amazon Telemetry & Bloatware',
-      category: 'Debloat',
-      targetDevice: 'All Fire TV Devices',
-      command: 'pm disable-user --user 0 com.amazon.device.sale.service',
-      outputMock: [
-        '$ pm disable-user --user 0 com.amazon.device.sale.service',
-        'Package com.amazon.device.sale.service new state: disabled-user',
-        'Freed ~140MB idle RAM. Background telemetry daemon stopped.'
-      ]
-    },
-    {
-      name: 'Disable Silent OTA Updates',
-      category: 'Firmware Lock',
-      targetDevice: 'Fire TV (FireOS 7 / 8)',
-      command: 'pm disable-user --user 0 com.amazon.device.software.ota',
-      outputMock: [
-        '$ pm disable-user --user 0 com.amazon.device.software.ota',
-        'Package com.amazon.device.software.ota new state: disabled-user',
-        'Firmware frozen. Silent background updates blocked.'
-      ]
-    },
-    {
-      name: 'Trim System Cache (Bootloop Prevention)',
-      category: 'Maintenance',
-      targetDevice: 'Chromecast 4K / Google TV',
-      command: 'pm trim-caches 1000M',
-      outputMock: [
-        '$ pm trim-caches 1000M',
-        'Trimmed 1,048,576,000 bytes from cache partition.',
-        'Usable flash storage expanded.'
-      ]
-    },
-    {
-      name: 'Grant File Manager Sideload Permission',
-      category: 'Google TV',
-      targetDevice: 'Chromecast with Google TV',
-      command: 'appops set com.apk.installer REQUEST_INSTALL_PACKAGES allow',
-      outputMock: [
-        '$ appops set com.apk.installer REQUEST_INSTALL_PACKAGES allow',
-        'Granted REQUEST_INSTALL_PACKAGES. File manager can install APKs without prompts.'
-      ]
+  const [adb,setAdb] = useState<Adb | null>(null);
+  const [busy,setBusy] = useState(false); const [running,setRunning] = useState(false);
+  const [device,setDevice] = useState(''); const [command,setCommand] = useState('getprop ro.product.model');
+  const [logs,setLogs]=useState<string[]>(['WebUSB transport ready. No device is connected.']);
+  const [error,setError]=useState(''); const [copied,setCopied]=useState('');
+  const current=useRef<Adb|null>(null); const abort=useRef<AbortController|null>(null); const connectionAbort=useRef<AbortController|null>(null); const mounted=useRef(true);
+  const supported=typeof navigator !== 'undefined' && 'usb' in navigator && window.isSecureContext;
+  useEffect(() => { mounted.current=true; return () => { mounted.current=false; connectionAbort.current?.abort(); abort.current?.abort(); void current.current?.close().catch(() => {}); }; },[]);
+  const log=(message: string) => { if(mounted.current) setLogs(l => [...l.slice(-199),message]); };
+  const connect=async () => {
+    if(!supported || busy) return;
+    setError(''); setBusy(true);
+    const controller=new AbortController(); connectionAbort.current=controller;
+    let opened: AdbDaemonWebUsbConnection | undefined;
+    const closeConnection = (connection: AdbDaemonConnection) => Promise.all([connection.readable.cancel(),connection.writable.close()]).then(() => {});
+    let client: Adb | undefined;
+    try {
+      const [{ Adb,AdbDaemonTransport },{ AdbDaemonWebUsbDeviceManager },{ default:AdbWebCredentialStore }]=await Promise.all([import('@yume-chan/adb'),import('@yume-chan/adb-daemon-webusb'),import('@yume-chan/adb-credential-web')]);
+      const selected=await AdbDaemonWebUsbDeviceManager.BROWSER!.requestDevice();
+      if(!selected || controller.signal.aborted || !mounted.current) return;
+      log(`USB device selected: ${selected.name}. Accept the RSA authorization prompt on the device.`);
+      const timer=setTimeout(() => controller.abort(new Error('USB authorization timed out.')),60_000);
+      try {
+        // Tango's connect/authenticate APIs do not accept a signal. Close late results too.
+        const opening=selected.connect();
+        void opening.then(value => { if(controller.signal.aborted) return closeConnection(value); }).catch(() => {});
+        opened=await Promise.race([opening,abortPromise(controller.signal)]);
+        const authenticating=AdbDaemonTransport.authenticate({ serial:selected.serial,connection:opened,credentialStore:new AdbWebCredentialStore('OpenCast') });
+        void authenticating.then(value => { if(controller.signal.aborted) return value.close(); }).catch(() => {});
+        const transport=await Promise.race([authenticating,abortPromise(controller.signal)]);
+        if(controller.signal.aborted || !mounted.current) { await transport.close(); return; }
+        client=new Adb(transport); current.current=client; setAdb(client); setDevice(`${selected.name} · ${selected.serial}`);
+        log(`Authenticated USB connection established: ${transport.banner.product || selected.name}`);
+        void client.disconnected.catch(() => {}).finally(() => { if(mounted.current && current.current===client) { current.current=null; setAdb(null); log('Device disconnected.'); } });
+      } finally { clearTimeout(timer); }
+    } catch(e) {
+      if(opened) await closeConnection(opened).catch(() => {});
+      if(mounted.current) setError(controller.signal.aborted ? String((controller.signal.reason as Error)?.message || 'Connection cancelled.') : `Connection failed: ${(e as Error).message}. Check USB debugging and device authorization.`);
+    } finally { connectionAbort.current=null; if(mounted.current) setBusy(false); }
+  };
+  const disconnect=async () => { abort.current?.abort(); try { await adb?.close(); } catch(e) { setError((e as Error).message); } current.current=null; setAdb(null); log('Connection closed.'); };
+  const run=async () => {
+    const executed=command.trim();
+    if(!adb || !executed || running) return;
+    if(!window.confirm(`Run this command on ${device}?\n\n${executed}\n\nCommands can change your device. Continue only if you understand it.`)) return;
+    setError(''); setRunning(true);
+    const controller=new AbortController(); abort.current=controller;
+    const timer=setTimeout(() => controller.abort(new Error('Command timed out after 20 seconds. The device may still be processing it.')),20_000);
+    const readers: Reader[]=[]; let outputBytes=0;
+    const onAbort=() => { for(const reader of readers) void reader.cancel().catch(() => {}); };
+    controller.signal.addEventListener('abort',onAbort,{ once:true });
+    log(`$ ${executed}`);
+    try {
+      const read=async (stream: Stream) => {
+        const reader=stream.getReader(); readers.push(reader); const decoder=new TextDecoder();
+        try {
+          while(true) {
+            const { done,value }=await reader.read(); if(done) break;
+            outputBytes += value?.byteLength || 0;
+            if(outputBytes > 2*1024*1024) { controller.abort(new Error('Output exceeded 2 MB. Reading stopped; the device may still be running.')); break; }
+            log(decoder.decode(value || new Uint8Array(),{ stream:true }));
+          }
+          log(decoder.decode());
+        } finally { reader.releaseLock(); }
+      };
+      if(adb.subprocess.shellProtocol) {
+        const process=await adb.subprocess.shellProtocol.spawn(executed,controller.signal);
+        const exited=process.exited;
+        const results=await Promise.allSettled([read(process.stdout),read(process.stderr),exited]);
+        if(controller.signal.aborted) throw controller.signal.reason;
+        const failure=results.find(r => r.status==='rejected'); if(failure?.status==='rejected') throw failure.reason;
+        const exit=results[2]; if(exit.status==='fulfilled') log(`Process exited with code ${exit.value}.`);
+      } else {
+        const process=await adb.subprocess.noneProtocol.spawn(executed,controller.signal);
+        await Promise.allSettled([read(process.output),process.exited]);
+        if(controller.signal.aborted) throw controller.signal.reason;
+        log('Output complete. This legacy shell transport does not report an exit code.');
+      }
+    } catch(e) {
+      if(mounted.current) setError(controller.signal.aborted ? String((controller.signal.reason as Error)?.message || 'Stopped waiting. The device may still be processing the command.') : `Command failed: ${(e as Error).message}`);
+    } finally {
+      clearTimeout(timer); controller.signal.removeEventListener('abort',onAbort);
+      for(const reader of readers) await reader.cancel().catch(() => {});
+      abort.current=null; if(mounted.current) setRunning(false);
     }
-  ];
-
-  const handleConnect = () => {
-    setTerminalLogs(prev => [
-      ...prev,
-      `[${new Date().toLocaleTimeString()}] Attempting TCP connection to ${deviceIp}:${port}...`,
-      `[${new Date().toLocaleTimeString()}] Handshake accepted! RSA fingerprint confirmed by TV display.`,
-      `[${new Date().toLocaleTimeString()}] Connected to target device: mantle (FireOS 8.1.0.4 - Android 11).`
-    ]);
-    setIsConnected(true);
   };
-
-  const handleDisconnect = () => {
-    setTerminalLogs(prev => [
-      ...prev,
-      `[${new Date().toLocaleTimeString()}] Connection closed to ${deviceIp}:${port}.`
-    ]);
-    setIsConnected(false);
-  };
-
-  const handleRunScript = (script: QuickScript) => {
-    setTerminalLogs(prev => [
-      ...prev,
-      `[${new Date().toLocaleTimeString()}] Executing: adb shell ${script.command}`,
-      ...script.outputMock
-    ]);
-  };
-
-  const handleCustomSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!customCommand.trim()) return;
-
-    setTerminalLogs(prev => [
-      ...prev,
-      `$ ${customCommand}`,
-      `Command acknowledged by adbd daemon. Status: OK (exit code 0)`
-    ]);
-    setCustomCommand('');
-  };
-
-  const handleCopy = (cmd: string) => {
-    navigator.clipboard.writeText(`adb shell ${cmd}`);
-    setCopiedCmd(cmd);
-    setTimeout(() => setCopiedCmd(null), 2000);
-  };
-
-  return (
-    <div className="space-y-6 max-w-5xl mx-auto">
-      {/* Header */}
-      <div className="border border-slate-200 dark:border-slate-800 rounded-2xl p-6 bg-white dark:bg-slate-900 shadow-sm space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2 text-xs font-mono text-blue-600 dark:text-blue-400">
-            <Terminal className="w-4 h-4" />
-            <span>OpenCast WebADB Wireless Terminal Studio</span>
-          </div>
-          <span className={`text-xs font-mono px-2 py-0.5 rounded ${
-            isConnected
-              ? 'bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-400 border border-emerald-300 dark:border-emerald-800'
-              : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
-          }`}>
-            {isConnected ? 'Bridge: Connected' : 'Bridge: Disconnected'}
-          </span>
-        </div>
-
-        <div>
-          <h1 className="text-2xl font-extrabold text-slate-900 dark:text-white tracking-tight">
-            In-Browser ADB Terminal & Execution Bridge
-          </h1>
-          <p className="text-xs text-slate-600 dark:text-slate-300 mt-1 leading-relaxed">
-            Execute debloating commands, bypass sideload restrictions, and freeze OTA firmware directly from your browser over Wi-Fi without needing the Android SDK installed on your computer.
-          </p>
-        </div>
-
-        {/* Connection Bar */}
-        <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
-          <div className="flex items-center gap-2 flex-1 max-w-md">
-            <Wifi className="w-4 h-4 text-blue-500 shrink-0" />
-            <input
-              type="text"
-              value={deviceIp}
-              disabled={isConnected}
-              onChange={(e) => setDeviceIp(e.target.value)}
-              placeholder="Device IP (e.g. 192.168.1.145)"
-              className="flex-1 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 font-mono text-slate-900 dark:text-white"
-            />
-            <span className="text-slate-400 font-mono">:</span>
-            <input
-              type="number"
-              value={port}
-              disabled={isConnected}
-              onChange={(e) => setPort(parseInt(e.target.value, 10))}
-              className="w-20 px-2 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 font-mono text-slate-900 dark:text-white"
-            />
-          </div>
-
-          <div className="flex items-center gap-2">
-            {!isConnected ? (
-              <button
-                onClick={handleConnect}
-                className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-semibold transition-colors shadow-sm"
-              >
-                Connect Wireless ADB
-              </button>
-            ) : (
-              <button
-                onClick={handleDisconnect}
-                className="px-4 py-2 rounded-lg bg-slate-200 dark:bg-slate-800 hover:bg-red-500 hover:text-white text-slate-700 dark:text-slate-300 font-semibold transition-colors"
-              >
-                Disconnect
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Two Column Layout: Quick Actions Left, Live Terminal Right */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Left: 1-Click Scripts (5 cols) */}
-        <div className="lg:col-span-5 space-y-3">
-          <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center justify-between">
-            <span>One-Click ADB Presets</span>
-            <span className="text-xs text-slate-400 font-mono">5 Scripts</span>
-          </h3>
-
-          <div className="space-y-2.5">
-            {quickScripts.map((script, idx) => (
-              <div
-                key={idx}
-                className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5 space-y-2 hover:border-slate-300 dark:hover:border-slate-700 transition-all text-xs"
-              >
-                <div className="flex items-center justify-between">
-                  <span className="font-semibold text-slate-900 dark:text-white">{script.name}</span>
-                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400">
-                    {script.category}
-                  </span>
-                </div>
-
-                <div className="p-2 rounded bg-slate-950 text-emerald-400 font-mono text-[11px] truncate border border-slate-800">
-                  {script.command}
-                </div>
-
-                <div className="flex items-center justify-between pt-1">
-                  <button
-                    onClick={() => handleCopy(script.command)}
-                    className="flex items-center gap-1 text-[11px] text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 font-mono"
-                  >
-                    {copiedCmd === script.command ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
-                    {copiedCmd === script.command ? 'Copied' : 'Copy'}
-                  </button>
-
-                  <button
-                    onClick={() => handleRunScript(script)}
-                    className="flex items-center gap-1 px-2.5 py-1 rounded bg-slate-900 dark:bg-white text-white dark:text-slate-900 font-semibold text-[11px] hover:opacity-90 transition-opacity"
-                  >
-                    <Play className="w-3 h-3" />
-                    Execute Script
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Right: Live Interactive Terminal (7 cols) */}
-        <div className="lg:col-span-7 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-950 p-5 shadow-2xl space-y-3">
-          <div className="flex items-center justify-between text-xs font-mono text-slate-400 border-b border-slate-800 pb-2">
-            <div className="flex items-center gap-2">
-              <span className="w-3 h-3 rounded-full bg-red-500/80 inline-block"></span>
-              <span className="w-3 h-3 rounded-full bg-yellow-500/80 inline-block"></span>
-              <span className="w-3 h-3 rounded-full bg-emerald-500/80 inline-block"></span>
-              <span className="text-slate-300 ml-2">OpenCast Interactive Shell (tty0)</span>
-            </div>
-            <button
-              onClick={() => setTerminalLogs(['Terminal buffer cleared.'])}
-              className="hover:text-slate-200 flex items-center gap-1"
-            >
-              <RotateCcw className="w-3 h-3" /> Clear
-            </button>
-          </div>
-
-          <div className="font-mono text-xs text-emerald-400/90 space-y-1 min-h-[360px] max-h-[460px] overflow-y-auto leading-relaxed">
-            {terminalLogs.map((log, i) => (
-              <div key={i} className="whitespace-pre-wrap">{log}</div>
-            ))}
-          </div>
-
-          {/* Interactive Shell Input Form */}
-          <form onSubmit={handleCustomSubmit} className="pt-2 border-t border-slate-800 flex items-center gap-2">
-            <span className="text-emerald-400 font-mono text-xs">$</span>
-            <input
-              type="text"
-              value={customCommand}
-              onChange={(e) => setCustomCommand(e.target.value)}
-              placeholder="e.g. pm list packages -3 | pm disable-user --user 0 ..."
-              className="flex-1 bg-transparent text-xs font-mono text-white placeholder-slate-600 focus:outline-none"
-            />
-            <button
-              type="submit"
-              className="px-3 py-1 rounded bg-slate-800 hover:bg-slate-700 text-xs font-mono text-slate-200 transition-colors"
-            >
-              Send
-            </button>
-          </form>
-        </div>
-      </div>
-    </div>
-  );
+  const copy=async (text: string) => { try { await copyText(text); setCopied(text); } catch(e) { setError((e as Error).message); } };
+  return <div className="space-y-6">
+    <section className="panel p-6 space-y-4"><div className="eyebrow"><Terminal size={15}/> REAL WEBUSB TRANSPORT</div><h1 className="page-title">ADB device studio</h1><p className="muted max-w-3xl">Connect an Android device with a USB cable. Commands and output go directly between your browser and the device—not through the OpenCast server. Browsers cannot open arbitrary wireless ADB TCP sockets; use the desktop Android SDK for Wi-Fi debugging.</p><div className="notice flex gap-3"><AlertTriangle size={18} className="shrink-0"/><span>Only use hardware you own or administer. Commands may expose package information or change settings. Back up first. WebUSB requires a supported Chromium browser, HTTPS (or localhost), and USB debugging authorization.</span></div><div className="flex flex-wrap items-center gap-3"><button className="primary-button" disabled={!supported || busy || !!adb} onClick={connect}><Usb size={16}/>{busy ? 'Waiting for USB authorization…' : 'Select USB device'}</button>{busy && <button className="secondary-button" onClick={() => connectionAbort.current?.abort(new Error('Connection cancelled.'))}>Cancel connection</button>}{adb && <button className="secondary-button" onClick={disconnect}>Disconnect</button>}<span role="status" className="text-xs font-mono muted">{adb ? `Connected: ${device}` : supported ? 'No device connected' : 'WebUSB unavailable in this browser/context'}</span></div>{error && <p role="alert" className="text-sm text-red-600 dark:text-red-400">{error}</p>}</section>
+    <div className="grid lg:grid-cols-5 gap-6"><section className="lg:col-span-2 space-y-3"><h2 className="section-title">Command presets</h2>{presets.map(p => <div key={p.name} className="panel p-4 space-y-2"><div className="flex justify-between gap-2"><h3 className="text-sm font-semibold">{p.name}</h3><button className="icon-button" aria-label={`Copy ${p.name}`} onClick={() => copy(p.command)}>{copied===p.command ? <Check size={15}/> : <Copy size={15}/>}</button></div><p className="text-xs muted">{p.note}</p><code className="block text-xs break-all text-blue-600 dark:text-blue-400">{p.command}</code><button className="secondary-button" disabled={running} onClick={() => setCommand(p.command)}>Load into terminal</button></div>)}</section>
+    <section className="lg:col-span-3 panel overflow-hidden self-start"><div className="p-4 border-b border-slate-200 dark:border-slate-800 flex justify-between"><h2 className="section-title">Device terminal</h2><span className="text-xs font-mono muted">Actual output only</span></div><div className="bg-slate-950 text-slate-100 p-4 font-mono text-xs h-96 overflow-auto" role="log" aria-label="ADB terminal output">{logs.map((entry,i) => <pre key={i} className="whitespace-pre-wrap break-all mb-2">{entry}</pre>)}</div><form className="p-4 space-y-3" onSubmit={e => { e.preventDefault(); void run(); }}><label className="text-xs font-medium" htmlFor="adb-command">Shell command</label><input id="adb-command" className="field font-mono" value={command} disabled={running} onChange={e => setCommand(e.target.value)} maxLength={2000}/><div className="flex gap-2"><button className="primary-button" disabled={!adb || running || !command.trim()}><Play size={15}/>{running ? 'Running…' : 'Review & run'}</button>{running && <button type="button" className="secondary-button" onClick={() => abort.current?.abort(new Error('Stopped waiting. The device may still be processing the command.'))}><Square size={14}/>Stop waiting</button>}</div></form></section></div>
+  </div>;
 };
