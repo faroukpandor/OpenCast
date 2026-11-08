@@ -1,0 +1,6 @@
+{
+  "name": "Streaming Intel Hub",
+  "description": "Proprietary Streaming Intelligence Platform: A self-hosted, privacy-first alternative to AFTVnews for Fire TV, Google TV, and Roku devices with ADB solutions, zero-PII analytics, cryptographic anti-spam, and RAG knowledge base.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

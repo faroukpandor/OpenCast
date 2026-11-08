@@ -1,0 +1,91 @@
+---
+// Guide to deploy the Astro frontend for free to Cloudflare Pages
+---
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Deploy to Free Cloudflare Pages - Streaming Intel Hub</title>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen">
+  <header class="border-b border-slate-800 px-8 py-4 flex items-center justify-between">
+    <a href="/" class="text-lg font-bold text-white">Streaming Intel Hub</a>
+    <a href="/" class="text-sm text-blue-400">&larr; Back to Catalog</a>
+  </header>
+
+  <main class="max-w-4xl mx-auto px-6 py-12 space-y-8">
+    <div>
+      <div class="text-xs font-mono uppercase text-emerald-400">100% Free Tier · Zero Cost · Unlimited Bandwidth</div>
+      <h1 class="text-3xl font-extrabold text-white mt-1">Cloudflare Pages Free Deployment Guide</h1>
+      <p class="text-sm text-slate-400 mt-2">
+        Deploy this static Astro frontend to Cloudflare Pages for $0/month with global edge CDN, automatic HTTPS, and instant rebuilds.
+      </p>
+    </div>
+
+    <!-- Step-by-Step Instructions -->
+    <div class="space-y-6">
+      <div class="p-6 rounded-xl border border-slate-800 bg-slate-900/60 space-y-3">
+        <h2 class="text-lg font-bold text-white flex items-center gap-2">
+          <span class="w-6 h-6 rounded-full bg-blue-600 text-xs flex items-center justify-center font-bold">1</span>
+          Build the Astro Static Files Locally
+        </h2>
+        <p class="text-sm text-slate-300">Run the build command inside the frontend directory:</p>
+        <pre class="p-3 bg-black/70 rounded-lg text-xs font-mono text-emerald-400 overflow-x-auto">cd frontend
+npm install
+npm run build</pre>
+        <p class="text-xs text-slate-400">This compiles all device specs, issues, and SSG pages into the <code class="text-blue-300 font-mono">dist/</code> folder.</p>
+      </div>
+
+      <div class="p-6 rounded-xl border border-slate-800 bg-slate-900/60 space-y-3">
+        <h2 class="text-lg font-bold text-white flex items-center gap-2">
+          <span class="w-6 h-6 rounded-full bg-blue-600 text-xs flex items-center justify-center font-bold">2</span>
+          Deploy via Cloudflare Dashboard (Method A: Git Integration)
+        </h2>
+        <ol class="list-decimal list-inside text-sm text-slate-300 space-y-2">
+          <li>Log in to <strong class="text-white">dash.cloudflare.com</strong> (Free tier).</li>
+          <li>Go to <strong class="text-white">Compute & AI &rarr; Workers & Pages &rarr; Create application &rarr; Pages</strong>.</li>
+          <li>Connect your GitHub / GitLab repository containing <code class="text-blue-300 font-mono">streaming-intel-hub</code>.</li>
+          <li>Configure Build Settings:
+            <ul class="list-disc list-inside ml-6 mt-1 text-xs text-slate-400 space-y-1">
+              <li>Framework preset: <strong class="text-white">Astro</strong></li>
+              <li>Root directory: <strong class="text-white">frontend</strong> (or leave blank if at root)</li>
+              <li>Build command: <strong class="text-white">npm run build</strong></li>
+              <li>Build output directory: <strong class="text-white">dist</strong></li>
+            </ul>
+          </li>
+          <li>Click <strong class="text-white">Save and Deploy</strong>. Cloudflare will publish to a free <code class="text-emerald-400 font-mono">*.pages.dev</code> URL with free SSL.</li>
+        </ol>
+      </div>
+
+      <div class="p-6 rounded-xl border border-slate-800 bg-slate-900/60 space-y-3">
+        <h2 class="text-lg font-bold text-white flex items-center gap-2">
+          <span class="w-6 h-6 rounded-full bg-blue-600 text-xs flex items-center justify-center font-bold">3</span>
+          Deploy via Wrangler CLI in 10 Seconds (Method B: Direct)
+        </h2>
+        <p class="text-sm text-slate-300">If you prefer deploying directly from your terminal without linking Git:</p>
+        <pre class="p-3 bg-black/70 rounded-lg text-xs font-mono text-emerald-400 overflow-x-auto"># 1. Login to Cloudflare via CLI
+npx wrangler login
+
+# 2. Deploy your built dist directory
+npx wrangler pages deploy dist --project-name=streaming-intel-hub</pre>
+      </div>
+
+      <div class="p-6 rounded-xl border border-slate-800 bg-slate-900/60 space-y-3">
+        <h2 class="text-lg font-bold text-white flex items-center gap-2">
+          <span class="w-6 h-6 rounded-full bg-blue-600 text-xs flex items-center justify-center font-bold">4</span>
+          Connect API Subdomain to Your Backend (VPS / Free Host)
+        </h2>
+        <p class="text-sm text-slate-300">
+          In Cloudflare DNS, add an <strong class="text-white">A record</strong> pointing <code class="text-blue-300 font-mono">api.yourdomain.com</code> to your VPS IP address running the FastAPI docker container:
+        </p>
+        <pre class="p-3 bg-black/70 rounded-lg text-xs font-mono text-slate-300 overflow-x-auto">Type: A
+Name: api
+IPv4 address: 123.45.67.89 (Your VPS)
+Proxy status: Proxied (Orange cloud enabled for free DDoS protection & SSL)</pre>
+      </div>
+    </div>
+  </main>
+</body>
+</html>

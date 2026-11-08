@@ -1,0 +1,127 @@
+---
+import Database from 'better-sqlite3';
+import path from 'node:path';
+
+export async function getStaticPaths() {
+  let issues = [];
+  try {
+    const dbPath = path.resolve(process.cwd(), '../backend/streaming_intel.db');
+    const db = new Database(dbPath, { readonly: true });
+    issues = db.prepare(`
+      SELECT i.id, i.device_id, i.title, i.description, i.severity, i.created_at,
+             d.name as device_name, d.ecosystem
+      FROM issues i
+      LEFT JOIN devices d ON i.device_id = d.id
+    `).all();
+
+    for (const issue of issues) {
+      issue.solutions = db.prepare('SELECT id, method, command_code, success_rate FROM solutions WHERE issue_id = ?').all(issue.id);
+    }
+    db.close();
+  } catch (e) {
+    issues = [
+      {
+        id: 1,
+        title: "FireOS 8 blocks ADB package installer for third-party APKs",
+        description: "Amazon firmware update RS8104 enforces strict verification.",
+        severity: "high",
+        device_name: "Amazon Fire TV Stick 4K Max",
+        ecosystem: "Amazon",
+        solutions: [{ id: 1, method: "ADB", command_code: "adb shell settings put global verifier_verify_adb_installs 0", success_rate: 0.98 }]
+      }
+    ];
+  }
+
+  return issues.map((issue) => ({
+    params: { id: issue.id.toString() },
+    props: { issue }
+  }));
+}
+
+const { issue } = Astro.props;
+---
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{issue.title} - Solution & ADB Fix</title>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen">
+  <header class="border-b border-slate-800 px-8 py-4 flex items-center justify-between">
+    <a href="/" class="text-lg font-bold text-white">Streaming Intel Hub</a>
+    <a href="/" class="text-sm text-blue-400">&larr; Back to Catalog</a>
+  </header>
+
+  <main class="max-w-4xl mx-auto px-6 py-12 space-y-8">
+    <div>
+      <div class="flex items-center gap-3">
+        <span class="text-xs px-2 py-0.5 rounded font-mono bg-red-950 text-red-400 border border-red-800 uppercase">
+          {issue.severity} Severity
+        </span>
+        <span class="text-xs text-slate-400 font-mono">{issue.device_name} · {issue.ecosystem}</span>
+      </div>
+      <h1 class="text-3xl font-extrabold text-white mt-2 leading-tight">{issue.title}</h1>
+      <p class="text-base text-slate-300 mt-3 leading-relaxed">{issue.description}</p>
+    </div>
+
+    <!-- Verified Workarounds & Commands -->
+    <div class="space-y-4">
+      <h2 class="text-xl font-bold text-white">Verified Workarounds & Terminal Commands</h2>
+      {issue.solutions && issue.solutions.map((sol) => (
+        <div class="border border-slate-800 rounded-xl p-5 bg-slate-900/70 space-y-3">
+          <div class="flex items-center justify-between text-xs font-mono">
+            <span class="text-blue-400 font-semibold">Method: {sol.method}</span>
+            <span class="text-emerald-400 font-semibold">{Math.round(sol.success_rate * 100)}% Success Rate</span>
+          </div>
+          <div class="p-3 bg-black/60 rounded-lg border border-slate-800 text-xs font-mono text-emerald-300 overflow-x-auto">
+            {sol.command_code}
+          </div>
+        </div>
+      ))}
+    </div>
+
+    <!-- Related Issues via /api/issues/:id/related -->
+    <div id="related-issues-container" class="border border-slate-800 rounded-xl p-6 bg-slate-900/40 space-y-3">
+      <h3 class="text-base font-semibold text-white">Related System Issues</h3>
+      <div id="related-issues-list" class="space-y-2 text-sm text-slate-400">
+        Loading related troubleshooting guides...
+      </div>
+    </div>
+
+    <!-- Mount Proof-of-Work Comment Widget -->
+    <div id="comment-widget-container"></div>
+  </main>
+
+  <script src="/track.js"></script>
+  <script src="/comments.js"></script>
+  <script define:vars={{ issueId: issue.id, pageSlug: `issue-${issue.id}` }}>
+    window.addEventListener('DOMContentLoaded', async () => {
+      // 1. Mount Comment widget with PoW miner
+      if (window.initCommentWidget) {
+        window.initCommentWidget('comment-widget-container', pageSlug);
+      }
+
+      // 2. Fetch Related Issues from /api/issues/:id/related
+      try {
+        const res = await fetch(`/api/issues/${issueId}/related`);
+        const data = await res.json();
+        const container = document.getElementById('related-issues-list');
+        if (data && data.length > 0) {
+          container.innerHTML = data.map(r => `
+            <a href="/issues/${r.id}" class="block p-3 rounded-lg border border-slate-800 hover:bg-slate-800/60 transition">
+              <div class="text-sm font-medium text-slate-200">${r.title}</div>
+              <div class="text-xs text-blue-400 mt-1 font-mono">Matched: ${r.matched_keywords ? r.matched_keywords.join(', ') : 'Relevance'}</div>
+            </a>
+          `).join('');
+        } else {
+          container.innerHTML = '<p class="text-xs text-slate-500 italic">No directly related issues found in this cluster.</p>';
+        }
+      } catch (e) {
+        document.getElementById('related-issues-list').innerHTML = '<p class="text-xs text-slate-500">Related issues offline.</p>';
+      }
+    });
+  </script>
+</body>
+</html>

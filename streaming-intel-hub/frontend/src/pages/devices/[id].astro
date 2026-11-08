@@ -1,0 +1,78 @@
+---
+import Database from 'better-sqlite3';
+import path from 'node:path';
+
+export async function getStaticPaths() {
+  let devices = [];
+  try {
+    const dbPath = path.resolve(process.cwd(), '../backend/streaming_intel.db');
+    const db = new Database(dbPath, { readonly: true });
+    devices = db.prepare('SELECT id, name, ecosystem, release_date, specs_json FROM devices').all();
+    db.close();
+  } catch (e) {
+    devices = [
+      { id: 1, name: "Amazon Fire TV Stick 4K Max", ecosystem: "Amazon", release_date: "2023-10-18", specs_json: "{}" },
+      { id: 2, name: "Chromecast with Google TV (4K)", ecosystem: "Google", release_date: "2020-09-30", specs_json: "{}" }
+    ];
+  }
+
+  return devices.map((d) => ({
+    params: { id: d.id.toString() },
+    props: { device: d }
+  }));
+}
+
+const { device } = Astro.props;
+const specs = JSON.parse(device.specs_json || '{}');
+---
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{device.name} - Streaming Intel Hub</title>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen">
+  <header class="border-b border-slate-800 px-8 py-4 flex items-center justify-between">
+    <a href="/" class="text-lg font-bold text-white">Streaming Intel Hub</a>
+    <a href="/" class="text-sm text-blue-400">&larr; Back to Devices</a>
+  </header>
+
+  <main class="max-w-4xl mx-auto px-6 py-12 space-y-8">
+    <div>
+      <span class="text-xs font-mono uppercase text-blue-400">{device.ecosystem} Hardware Profile</span>
+      <h1 class="text-3xl font-extrabold text-white mt-1">{device.name}</h1>
+      <p class="text-sm text-slate-400 mt-1">Official Release Date: {device.release_date}</p>
+    </div>
+
+    <!-- Technical Specs Table -->
+    <div class="border border-slate-800 rounded-xl overflow-hidden bg-slate-900/60">
+      <div class="px-6 py-4 bg-slate-900 border-b border-slate-800 font-semibold text-sm">
+        Hardware & Firmware Architecture
+      </div>
+      <dl class="divide-y divide-slate-800 text-sm">
+        {Object.entries(specs).map(([key, val]) => (
+          <div class="px-6 py-3 grid grid-cols-3">
+            <dt class="font-mono text-xs uppercase text-slate-400">{key}</dt>
+            <dd class="col-span-2 text-slate-200">{val}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+
+    <!-- Mount Comment Widget -->
+    <div id="comment-widget-container"></div>
+  </main>
+
+  <script src="/track.js"></script>
+  <script src="/comments.js"></script>
+  <script define:vars={{ pageSlug: `device-${device.id}` }}>
+    window.addEventListener('DOMContentLoaded', () => {
+      if (window.initCommentWidget) {
+        window.initCommentWidget('comment-widget-container', pageSlug);
+      }
+    });
+  </script>
+</body>
+</html>
