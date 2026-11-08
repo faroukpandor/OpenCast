@@ -41,7 +41,7 @@ Latest implementation results:
 
 Browser coverage includes catalog filtering/search/related navigation, graph export, registration cookie properties, real PoW persistence, local APK checksum, persistent shortcode lookup, free assistant retrieval, disconnected WebUSB honesty, analytics opt-in, mobile navigation, axe accessibility scanning, production icons/fonts, and offline behavior. Browser setup extracts npm-bundled Chromium libraries automatically on Linux.
 
-CI is configured for pushes/PRs, but a remote CI run is not claimed here. Tests do not use a real Android device or live public feeds. Scraper tests cover mocked success, blocked responses, and malformed responses.
+Remote GitHub Actions verification passed on implementation commit `4cbdece` for both the branch push and PR #1 (Ubuntu/Node 22). Tests do not use a real Android device or live public feeds. Scraper tests cover mocked success, blocked responses, and malformed responses.
 
 ## Explicitly unverified / outside scope
 
