@@ -36,7 +36,7 @@ Version 2.2.0 implementation results (2026-11-08/09 UTC):
 - `npm run test:e2e`: **7 development browser workflows passed**, including account settings/MFA setup/password change/deletion and axe WCAG A/AA scans of catalog, authentication, privacy notice, and mobile navigation. Two production-only cases are intentionally skipped in this mode.
 - `npm run test:e2e:production`: **2 production workflows passed** against the compiled server.
 - `npm run verify:https`: passed locally and in CI using a real OpenSSL self-signed TLS proxy: Secure/HttpOnly/SameSite=Strict cookie, authenticated session, cross-origin write rejection, and exactly one trusted proxy hop.
-- GitHub Actions `container` job passed: Docker Compose build/start, `/health`, non-root UID 1000, runtime without `tsx`, bundled backup command, persistent volume/session/login across restart, and graceful exit code 0. See run 42564195558 (container job passed; the same run's regression assertion was subsequently corrected).
+- GitHub Actions `container` job passed: Docker Compose build/start, `/health`, non-root UID 1000, runtime without `tsx`, bundled backup command, persistent volume/session/login across restart, and graceful exit code 0. Final branch/PR verification passed on commit `65e947c` (runs 42564643902 and 42564647425), including the container job.
 - `npm audit` and `npm audit --omit=dev`: **0 reported vulnerabilities** at audit time.
 - `git diff --check`: passed.
 
