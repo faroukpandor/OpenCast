@@ -19,6 +19,7 @@ jobs:
       - run: npm run check
       - run: npm run test:e2e
       - run: npm run test:e2e:production
+      - run: npm run verify:https
       - run: npm audit
       - uses: actions/upload-artifact@v4
         if: failure()
@@ -26,3 +27,9 @@ jobs:
           name: browser-failures
           path: test-results/
           if-no-files-found: ignore
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm run verify:container

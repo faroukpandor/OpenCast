@@ -6,6 +6,9 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env) {
   const trustProxyHops = z.coerce.number().int().min(0).max(5).parse(env.TRUST_PROXY_HOPS || 0);
   const cookieSecure = z.enum(['true','false']).parse(env.COOKIE_SECURE || (production ? 'true' : 'false')) === 'true';
   const scraperEnabled = z.enum(['true','false']).parse(env.ENABLE_SCRAPERS || 'false') === 'true';
+  const redditEnabled = z.enum(['true','false']).parse(env.REDDIT_ACCESS_APPROVED || 'false') === 'true';
+  const operatorName = env.OPERATOR_NAME ? z.string().trim().min(1).max(120).parse(env.OPERATOR_NAME) : undefined;
+  const privacyContact = env.PRIVACY_CONTACT ? z.string().trim().max(254).refine(value => z.email().safeParse(value).success || (() => { try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password; } catch { return false; } })(), 'Use an email address or HTTPS contact URL.').parse(env.PRIVACY_CONTACT) : undefined;
   let publicUrl: string | undefined;
   if (env.APP_URL) {
     const url = z.url().parse(env.APP_URL);
@@ -26,5 +29,5 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env) {
   const youtubeChannels = (env.YOUTUBE_CHANNEL_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
   if (youtubeChannels.length > 5 || youtubeChannels.some(id => !/^UC[A-Za-z0-9_-]{22}$/.test(id))) throw new Error('Configure at most five valid YouTube channel IDs (UC followed by 22 characters).');
   const databasePath = z.string().min(1).parse(env.DATABASE_PATH || 'data/opencast.sqlite');
-  return { production, port, trustProxyHops, cookieSecure, scraperEnabled, publicUrl, admin, youtubeChannels, databasePath, analyticsSecret: env.ANALYTICS_SECRET };
+  return { production, port, trustProxyHops, cookieSecure, scraperEnabled, redditEnabled, operatorName, privacyContact, publicUrl, admin, youtubeChannels, databasePath, analyticsSecret: env.ANALYTICS_SECRET };
 }

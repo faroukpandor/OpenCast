@@ -13,7 +13,7 @@ export interface Issue {
   created_at?: string; solutions?: Solution[]; solutions_count?: number; source_url?: string | null;
   review_status?: 'reference' | 'unreviewed';
 }
-export interface User { id: number; username: string; email: string; role: 'admin' | 'member'; }
+export interface User { id: number; username: string; email: string; role: 'admin' | 'member'; mfa_enabled?: boolean; }
 export interface CommentItem {
   id: number; page_slug: string; author_hash: string; author_name: string; user_id: number | null;
   content: string; proof_of_work_nonce: string; created_at: string; client_id?: string;
@@ -26,3 +26,5 @@ export interface AnalyticsStats {
 export interface ShortcodeRecord { code: string; targetUrl: string; appName: string; sha256?: string; version?: string; createdAt: string; }
 export interface ChatMessage { role: 'user' | 'model'; text: string; }
 export interface ChatResponse { answer: string; sources: string[]; isAiGenerated: boolean; }
+
+export interface PublicConfig { registration: boolean; scraperConfigured: boolean; redditConfigured: boolean; analyticsRetentionDays: number; privacyContact: string | null; operatorName: string | null; }

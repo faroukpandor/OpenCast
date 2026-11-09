@@ -1,7 +1,7 @@
 {
   "name": "opencast",
   "private": true,
-  "version": "2.1.0",
+  "version": "2.2.0",
   "type": "module",
   "engines": {
     "node": ">=22.12"
@@ -17,10 +17,13 @@
     "check": "npm run security:check && npm run lint && npm test && npm run build",
     "audit:dependencies": "npm audit --omit=dev",
     "clean": "rm -rf dist",
-    "build:server": "esbuild server.ts --bundle --platform=node --format=esm --packages=external --outfile=dist-server/server.js",
+    "build:server": "esbuild server.ts --bundle --platform=node --format=esm --packages=external --outfile=dist-server/server.js && esbuild scripts/backup-db.ts --bundle --platform=node --format=esm --packages=external --outfile=dist-server/backup-db.js",
     "test:e2e:production": "npm run build && tsx scripts/prepare-browser.ts && E2E_PRODUCTION=true playwright test e2e/production.spec.ts",
     "security:check": "tsx scripts/security_check.ts",
-    "db:backup": "tsx scripts/backup-db.ts"
+    "db:backup": "tsx scripts/backup-db.ts",
+    "verify:https": "npm run build && tsx scripts/verify-https.ts",
+    "verify:container": "bash scripts/verify-container.sh",
+    "probe:feeds": "tsx scripts/probe-feeds.ts"
   },
   "dependencies": {
     "dotenv": "^17.2.3",
@@ -60,5 +63,6 @@
     "tsx": "^4.23.15",
     "typescript": "~5.9.3",
     "vite": "^7.3.7"
-  }
+  },
+  "license": "MIT"
 }

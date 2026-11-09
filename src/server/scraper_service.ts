@@ -1,7 +1,7 @@
 import { XMLParser } from 'fast-xml-parser';
 import type { StreamingStore } from './db.ts';
 
-export interface ScraperResult { source: string; status: 'ok' | 'error' | 'cooldown'; ingested: number; message?: string; }
+export interface ScraperResult { source: string; status: 'ok' | 'error' | 'cooldown' | 'skipped'; ingested: number; message?: string; }
 interface SourceState { failures: number; cooldownUntil: number; }
 const stripHtml = (text: string) => text.replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim();
 const array = (value: any) => value == null ? [] : Array.isArray(value) ? value : [value];
@@ -22,7 +22,7 @@ export class ScraperService {
     const delay = Math.min(6 * 60 * 60_000, 5 * 60_000 * 2 ** (failures - 1));
     states[source] = { failures, cooldownUntil: this.now() + delay };
   }
-  async run(channels: string[] = []): Promise<ScraperResult[]> {
+  async run(channels: string[] = [], redditApproved = false): Promise<ScraperResult[]> {
     if (this.running) throw new Error('An ingestion run is already in progress.');
     this.running = true;
     const results: ScraperResult[] = [];
@@ -30,6 +30,7 @@ export class ScraperService {
     try {
       for (const [subreddit, deviceId] of [['FireTV',1],['AndroidTV',2]] as const) {
         const source = `r/${subreddit}`;
+        if (!redditApproved) { results.push({ source, status: 'skipped', ingested: 0, message: 'Reddit access is not approved. Obtain Reddit permission, then set REDDIT_ACCESS_APPROVED=true.' }); continue; }
         if (this.inCooldown(states, source)) { results.push({ source, status: 'cooldown', ingested: 0, message: `Source is cooling down after a failure. Retry after ${new Date(states[source].cooldownUntil).toISOString()}.` }); continue; }
         const url = `https://www.reddit.com/r/${subreddit}/new.json?limit=25&raw_json=1`;
         try {
@@ -78,7 +79,7 @@ export class ScraperService {
   }
   private safeError(e: unknown) { return e instanceof Error && e.name === 'TimeoutError' ? 'Source timed out.' : 'Source unavailable or returned an invalid response.'; }
   private async get(url: string) {
-    const response = await this.fetcher(url, { signal: AbortSignal.timeout(12_000), redirect: 'error', headers: { 'User-Agent': 'OpenCast/2.1 (self-hosted feed reader)', Accept: 'application/json, application/atom+xml, application/xml' } });
+    const response = await this.fetcher(url, { signal: AbortSignal.timeout(12_000), redirect: 'error', headers: { 'User-Agent': 'OpenCast/2.2 (self-hosted feed reader)', Accept: 'application/json, application/atom+xml, application/xml' } });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     if (Number(response.headers.get('content-length')) > 2_000_000) throw new Error('Feed too large.');
     const reader = response.body?.getReader(); if (!reader) throw new Error('Empty response.');

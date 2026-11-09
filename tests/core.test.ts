@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { randomUUID,createHmac } from 'node:crypto';
 import { mkdtempSync,rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -140,4 +140,68 @@ test('SQLite backup is a verified restorable snapshot and refuses overwrite',asy
     try { assert.equal(restored.getUserByToken(account.token)?.email,'backup@example.com'); assert.equal(restored.getComments('issue-1')[0].content,data.content); }
     finally { restored.close(); }
   } finally { db.close(); rmSync(dir,{ recursive:true,force:true }); }
+});
+
+test('TOTP matches RFC 6238 vectors and rejects replay outside the accepted step',async () => {
+  const { base32Encode,base32Decode,generateTotpSecret,totpCode,verifyTotp,matchedTotpStep,otpauthUri }=await import('../src/server/totp.ts');
+  const secret=base32Encode(new TextEncoder().encode('12345678901234567890'));
+  assert.equal(secret,'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ');
+  assert.deepEqual(base32Decode(secret),new TextEncoder().encode('12345678901234567890'));
+  assert.equal(totpCode(secret,59_000,30,8),'94287082');
+  assert.equal(totpCode(secret,1_111_111_109_000,30,8),'07081804');
+  assert.equal(totpCode(secret,20_000_000_000_000,30,8),'65353130');
+  const generated=generateTotpSecret(); const time=1_700_000_000_000; const code=totpCode(generated,time);
+  assert.equal(matchedTotpStep(generated,code,time),Math.floor(time/30_000));
+  assert.ok(verifyTotp(generated,totpCode(generated,time-30_000),time));
+  assert.ok(!verifyTotp(generated,totpCode(generated,time+60_000),time));
+  assert.ok(!verifyTotp(generated,'12345',time)); assert.throws(() => base32Decode('!'));
+  assert.match(otpauthUri(generated,'test_user'),/^otpauth:\/\/totp\/OpenCast:test_user\?secret=/);
+});
+
+test('MFA secrets are encrypted, recovery codes are one-way, and password/account lifecycle revokes access',() => {
+  const db=new StreamingStore(':memory:',{ analyticsSecret:'test-only-analytics-secret-at-least-32-characters' });
+  try {
+    const account=db.registerUser('mfa_user','mfa@example.com','original-long-password');
+    const setup=db.beginMfa(account.user.id); const row=db.db.prepare('SELECT * FROM users WHERE id=?').get(account.user.id) as any;
+    assert.ok(!JSON.stringify(row).includes(setup.secret)); assert.equal(row.mfa_enabled,0);
+    const time=Date.now(); const code=totpCodeForTest(setup.secret,time);
+    assert.throws(() => db.enableMfa(account.user.id,'000000'),/Invalid authenticator/);
+    const enabled=db.enableMfa(account.user.id,code); assert.equal(enabled.recovery_codes.length,8);
+    assert.equal(db.getUserByToken(account.token)?.mfa_enabled,true);
+    assert.throws(() => db.loginUser('mfa_user','original-long-password'),/code required/);
+    assert.throws(() => db.loginUser('mfa_user','original-long-password',code),/Invalid authenticator/);
+    const recovery=enabled.recovery_codes[0]; const loggedIn=db.loginUser('mfa_user','original-long-password',recovery);
+    assert.throws(() => db.loginUser('mfa_user','original-long-password',recovery),/Invalid authenticator/);
+    const hashes=(db.db.prepare('SELECT code_hash FROM mfa_recovery_codes').all() as any[]).map(r => r.code_hash); assert.ok(hashes.every(h => !recovery.includes(h) && h.length===64));
+    const reset=db.createPasswordResetToken(account.user.id); db.resetPassword(reset.token,'replacement-long-password');
+    assert.equal(db.getUserByToken(loggedIn.token),null); assert.throws(() => db.resetPassword(reset.token,'another-long-password'),/invalid or expired/);
+    db.changePassword(account.user.id,'replacement-long-password','changed-long-password');
+    assert.throws(() => db.loginUser('mfa_user','replacement-long-password',enabled.recovery_codes[1]),/Invalid username/);
+    const data=challengeComment(db); db.addComment(data,account.user); assert.equal(db.getComments('issue-1').length,1);
+    assert.throws(() => db.deleteAccount(account.user.id,'wrong-password'),/Invalid password/);
+    db.deleteAccount(account.user.id,'changed-long-password',enabled.recovery_codes[1]);
+    assert.equal(db.getComments('issue-1').length,0); assert.equal(db.getUserByToken(account.token),null); assert.equal(db.listUsers().length,0);
+  } finally { db.close(); }
+});
+function totpCodeForTest(secret: string,time: number) {
+  // RFC implementation is exercised independently above; this derives the current code for lifecycle tests.
+  const alphabet='ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'; let bits=0; let value=0; const bytes:number[]=[];
+  for(const c of secret) { value=(value<<5)|alphabet.indexOf(c); bits+=5; if(bits>=8) { bytes.push((value>>>(bits-8))&255); bits-=8; } }
+  const b=Buffer.alloc(8); b.writeBigUInt64BE(BigInt(Math.floor(time/30_000)));
+  const d=createHmac('sha1',Buffer.from(bytes)).update(b).digest(); const o=d[d.length-1]&15;
+  return String(((d[o]&127)<<24|d[o+1]<<16|d[o+2]<<8|d[o+3])%1_000_000).padStart(6,'0');
+}
+
+test('SQLite rate-limit store persists windows, isolates prefixes, and resets expired keys',async () => {
+  const { SqliteRateLimitStore }=await import('../src/server/rate_limit_store.ts'); const db=new StreamingStore();
+  try {
+    let now=1_000_000; const a=new SqliteRateLimitStore(db.db,'login',() => now); const b=new SqliteRateLimitStore(db.db,'register',() => now);
+    a.init({ windowMs:60_000 } as any); b.init({ windowMs:120_000 } as any);
+    assert.equal(a.increment('ip').totalHits,1); assert.equal(a.increment('ip').totalHits,2); assert.equal(b.increment('ip').totalHits,1);
+    assert.equal(a.get('ip')?.resetTime?.getTime(),1_060_000); assert.equal(b.get('ip')?.resetTime?.getTime(),1_120_000);
+    a.decrement('ip'); assert.equal(a.get('ip')?.totalHits,1); a.resetKey('ip'); assert.equal(a.get('ip'),undefined);
+    a.increment('ip'); now=1_060_000; assert.equal(a.increment('ip').totalHits,1); assert.equal(b.get('ip')?.totalHits,1);
+    a.resetAll(); assert.equal(a.get('ip'),undefined); assert.equal(b.get('ip')?.totalHits,1);
+    now=1_120_000; a.shutdown(); assert.equal(db.db.prepare('SELECT COUNT(*) n FROM rate_limits').get()?.n,0);
+  } finally { db.close(); }
 });

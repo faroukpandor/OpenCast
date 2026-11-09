@@ -1,9 +1,10 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { createHmac, randomBytes, randomInt, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomInt, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
 import { classifyDeviceType } from '../utils/analytics_salt.ts';
 import { proofOfWorkHash } from './crypto.ts';
+import { generateTotpSecret, matchedTotpStep, otpauthUri } from './totp.ts';
 import { findRelatedIssues } from '../utils/related_search.ts';
 import { seedDevices, seedIssues, seedSolutions } from './seed.ts';
 import type { CommentItem, Device, Issue, ShortcodeRecord, User } from '../types.ts';
@@ -14,7 +15,7 @@ const DAY = 86_400_000;
 const PASSWORD_LENGTH = 64;
 const hashPassword = (password: string, salt: string) => scryptSync(password, salt, PASSWORD_LENGTH, { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
 const tokenHash = (token: string) => createHmac('sha256', 'opencast-session').update(token).digest('hex');
-const safeUser = (row: Row): User => ({ id: row.id, username: row.username, email: row.email, role: row.role });
+const safeUser = (row: Row): User => ({ id: row.id, username: row.username, email: row.email, role: row.role, mfa_enabled: !!row.mfa_enabled });
 
 export class StreamingStore {
   readonly db: DatabaseSync;
@@ -44,7 +45,15 @@ export class StreamingStore {
       CREATE TABLE IF NOT EXISTS analytics_events(id INTEGER PRIMARY KEY, page_url TEXT NOT NULL, referrer TEXT NOT NULL, device_type TEXT NOT NULL, daily_visitor_token TEXT NOT NULL, timestamp TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS analytics_time ON analytics_events(timestamp);
       CREATE TABLE IF NOT EXISTS shortcodes(code TEXT PRIMARY KEY, app_name TEXT NOT NULL, target_url TEXT NOT NULL, sha256 TEXT, version TEXT NOT NULL, created_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS password_reset_tokens(token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires_at INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS mfa_recovery_codes(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, code_hash TEXT NOT NULL, used INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS rate_limits(key TEXT PRIMARY KEY, hits INTEGER NOT NULL, reset_at INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS rate_limits_reset ON rate_limits(reset_at);
     `);
+    const userColumns = this.db.prepare('PRAGMA table_info(users)').all() as Row[];
+    if (!userColumns.some(c => c.name === 'mfa_secret')) this.db.exec('ALTER TABLE users ADD COLUMN mfa_secret TEXT;');
+    if (!userColumns.some(c => c.name === 'mfa_enabled')) this.db.exec('ALTER TABLE users ADD COLUMN mfa_enabled INTEGER NOT NULL DEFAULT 0;');
+    if (!userColumns.some(c => c.name === 'mfa_last_step')) this.db.exec('ALTER TABLE users ADD COLUMN mfa_last_step INTEGER NOT NULL DEFAULT -1;');
     // Apply reviewed safety corrections to the built-in reference rows once; preserve community data.
     if (!this.setting('reference_safety_v2')) this.transaction(() => {
       for (const d of seedDevices) this.db.prepare('UPDATE devices SET specs_json=? WHERE id=?').run(JSON.stringify(d.specs),d.id);
@@ -76,6 +85,8 @@ export class StreamingStore {
     this.db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(now);
     this.db.prepare('DELETE FROM challenges WHERE expires_at < ?').run(now);
     this.db.prepare('DELETE FROM analytics_events WHERE timestamp < ?').run(new Date(now - this.retentionDays * DAY).toISOString());
+    this.db.prepare('DELETE FROM password_reset_tokens WHERE expires_at < ?').run(now);
+    this.db.prepare('DELETE FROM rate_limits WHERE reset_at <= ?').run(now);
   }
   close() { this.db.close(); }
   private device(row: Row): Device { return { id: row.id, name: row.name, ecosystem: row.ecosystem, release_date: row.release_date, specs: JSON.parse(row.specs_json), issues_count: row.issues_count }; }
@@ -108,15 +119,129 @@ export class StreamingStore {
   private getUserById(id: number) { const row = this.db.prepare('SELECT * FROM users WHERE id=?').get(id) as Row | undefined; return row ? safeUser(row) : null; }
   private session(user: User) { const token = randomBytes(32).toString('hex'); this.db.prepare('INSERT INTO sessions VALUES (?,?,?)').run(tokenHash(token),user.id,Date.now()+7*DAY); return { token, user }; }
   registerUser(username: string,email: string,password: string) { return this.session(this.createUser(username,email,password)); }
-  loginUser(identity: string,password: string) {
+  loginUser(identity: string,password: string,mfaCode?: string) {
     const row = this.db.prepare('SELECT * FROM users WHERE username=? OR email=?').get(identity,identity) as Row | undefined;
     const computed = hashPassword(password,row?.salt || '00000000000000000000000000000000');
     const stored = Buffer.from(row?.hash || '00'.repeat(PASSWORD_LENGTH),'hex');
     if (!row || stored.length !== computed.length || !timingSafeEqual(stored,computed)) throw new Error('Invalid username/email or password.');
+    if (row.mfa_enabled) {
+      if (!mfaCode) throw Object.assign(new Error('Authenticator code required.'), { code: 'MFA_REQUIRED' });
+      if (!this.consumeMfaCode(row, mfaCode)) throw new Error('Invalid authenticator or recovery code.');
+    }
     return this.session(safeUser(row));
   }
   getUserByToken(token: string) { const row = this.db.prepare('SELECT u.* FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=? AND s.expires_at>?').get(tokenHash(token),Date.now()) as Row | undefined; return row ? safeUser(row) : null; }
   logoutUser(token: string) { this.db.prepare('DELETE FROM sessions WHERE token_hash=?').run(tokenHash(token)); return true; }
+  private mfaKey() { return createHash('sha256').update(`${this.analyticsSecret}:mfa:v1`).digest(); }
+  private encryptMfaSecret(secret: string) {
+    const iv = randomBytes(12); const cipher = createCipheriv('aes-256-gcm', this.mfaKey(), iv);
+    const encrypted = Buffer.concat([cipher.update(secret, 'utf8'), cipher.final()]);
+    return JSON.stringify({ iv: iv.toString('hex'), tag: cipher.getAuthTag().toString('hex'), data: encrypted.toString('hex') });
+  }
+  private decryptMfaSecret(stored: string) {
+    const { iv, tag, data } = JSON.parse(stored) as { iv: string; tag: string; data: string };
+    const decipher = createDecipheriv('aes-256-gcm', this.mfaKey(), Buffer.from(iv, 'hex'));
+    decipher.setAuthTag(Buffer.from(tag, 'hex'));
+    return Buffer.concat([decipher.update(Buffer.from(data, 'hex')), decipher.final()]).toString('utf8');
+  }
+  private verifyPassword(row: Row, password: string) {
+    const computed = hashPassword(password, row.salt); const stored = Buffer.from(row.hash, 'hex');
+    return stored.length === computed.length && timingSafeEqual(stored, computed);
+  }
+  private recoveryHash(code: string) { return createHmac('sha256', this.analyticsSecret).update(`mfa-recovery:${code.toUpperCase()}`).digest('hex'); }
+  listUsers(): User[] { return (this.db.prepare('SELECT * FROM users ORDER BY id').all() as Row[]).map(safeUser); }
+  beginMfa(userId: number) {
+    const row = this.db.prepare('SELECT * FROM users WHERE id=?').get(userId) as Row | undefined;
+    if (!row) throw new Error('User not found.');
+    if (row.mfa_enabled) throw new Error('MFA is already enabled.');
+    const secret = generateTotpSecret();
+    this.db.prepare('UPDATE users SET mfa_secret=?,mfa_enabled=0,mfa_last_step=-1 WHERE id=?').run(this.encryptMfaSecret(secret), userId);
+    return { secret, otpauth_uri: otpauthUri(secret, row.username) };
+  }
+  enableMfa(userId: number, code: string) {
+    const row = this.db.prepare('SELECT * FROM users WHERE id=?').get(userId) as Row | undefined;
+    if (!row?.mfa_secret) throw new Error('Start MFA setup first.');
+    if (row.mfa_enabled) throw new Error('MFA is already enabled.');
+    const secret = this.decryptMfaSecret(row.mfa_secret);
+    const step = matchedTotpStep(secret, code);
+    if (step === null) throw new Error('Invalid authenticator code.');
+    const codes = Array.from({ length: 8 }, () => randomBytes(5).toString('hex').toUpperCase().match(/.{1,5}/g)!.join('-'));
+    this.transaction(() => {
+      this.db.prepare('DELETE FROM mfa_recovery_codes WHERE user_id=?').run(userId);
+      const insert = this.db.prepare('INSERT INTO mfa_recovery_codes (user_id,code_hash,used) VALUES (?,?,0)');
+      for (const code of codes) insert.run(userId, this.recoveryHash(code));
+      this.db.prepare('UPDATE users SET mfa_enabled=1,mfa_last_step=? WHERE id=?').run(step, userId);
+    });
+    return { recovery_codes: codes };
+  }
+  private consumeMfaCode(row: Row, code: string): boolean {
+    const normalized = code.trim().toUpperCase();
+    const recovery = this.db.prepare('SELECT id FROM mfa_recovery_codes WHERE user_id=? AND code_hash=? AND used=0').get(row.id, this.recoveryHash(normalized)) as Row | undefined;
+    if (recovery) { this.db.prepare('UPDATE mfa_recovery_codes SET used=1 WHERE id=?').run(recovery.id); return true; }
+    const step = row.mfa_secret ? matchedTotpStep(this.decryptMfaSecret(row.mfa_secret), normalized) : null;
+    if (step === null || step <= row.mfa_last_step) return false;
+    this.db.prepare('UPDATE users SET mfa_last_step=? WHERE id=?').run(step, row.id);
+    return true;
+  }
+  disableMfa(userId: number, password: string, code: string) {
+    const row = this.db.prepare('SELECT * FROM users WHERE id=?').get(userId) as Row | undefined;
+    if (!row || !this.verifyPassword(row, password)) throw new Error('Invalid password.');
+    if (row.mfa_enabled && !this.consumeMfaCode(row, code)) throw new Error('Invalid authenticator or recovery code.');
+    this.transaction(() => {
+      this.db.prepare('UPDATE users SET mfa_secret=NULL,mfa_enabled=0,mfa_last_step=-1 WHERE id=?').run(userId);
+      this.db.prepare('DELETE FROM mfa_recovery_codes WHERE user_id=?').run(userId);
+    });
+  }
+  changePassword(userId: number, currentPassword: string, newPassword: string) {
+    const row = this.db.prepare('SELECT * FROM users WHERE id=?').get(userId) as Row | undefined;
+    if (!row || !this.verifyPassword(row, currentPassword)) throw new Error('Invalid current password.');
+    const salt = randomBytes(16).toString('hex'); const hash = hashPassword(newPassword, salt).toString('hex');
+    this.transaction(() => {
+      this.db.prepare('UPDATE users SET salt=?,hash=? WHERE id=?').run(salt, hash, userId);
+      this.db.prepare('DELETE FROM sessions WHERE user_id=?').run(userId);
+      this.db.prepare('DELETE FROM password_reset_tokens WHERE user_id=?').run(userId);
+    });
+  }
+  createPasswordResetToken(userId: number) {
+    if (!this.db.prepare('SELECT id FROM users WHERE id=?').get(userId)) throw new Error('User not found.');
+    const token = randomBytes(32).toString('hex'); const expiresAt = Date.now() + 60 * 60_000;
+    this.db.prepare('INSERT INTO password_reset_tokens VALUES (?,?,?,0)').run(tokenHash(token), userId, expiresAt);
+    return { token, expires_at: new Date(expiresAt).toISOString() };
+  }
+  resetPassword(token: string, newPassword: string) {
+    const row = this.db.prepare('SELECT * FROM password_reset_tokens WHERE token_hash=? AND used=0 AND expires_at>?').get(tokenHash(token), Date.now()) as Row | undefined;
+    if (!row) throw new Error('Reset token is invalid or expired.');
+    const salt = randomBytes(16).toString('hex'); const hash = hashPassword(newPassword, salt).toString('hex');
+    this.transaction(() => {
+      this.db.prepare('UPDATE users SET salt=?,hash=? WHERE id=?').run(salt, hash, row.user_id);
+      this.db.prepare('UPDATE password_reset_tokens SET used=1 WHERE token_hash=?').run(tokenHash(token));
+      this.db.prepare('DELETE FROM sessions WHERE user_id=?').run(row.user_id);
+      this.db.prepare('DELETE FROM password_reset_tokens WHERE user_id=?').run(row.user_id);
+    });
+  }
+  deleteAccount(userId: number, password: string, mfaCode?: string) {
+    const row = this.db.prepare('SELECT * FROM users WHERE id=?').get(userId) as Row | undefined;
+    if (!row || !this.verifyPassword(row, password)) throw new Error('Invalid password.');
+    if (row.mfa_enabled && (!mfaCode || !this.consumeMfaCode(row, mfaCode))) throw new Error('Invalid authenticator or recovery code.');
+    this.transaction(() => {
+      this.db.prepare('DELETE FROM comments WHERE user_id=?').run(userId);
+      this.db.prepare('DELETE FROM users WHERE id=?').run(userId);
+    });
+  }
+  deleteComment(commentId: number, actor: User) {
+    const row = this.db.prepare('SELECT * FROM comments WHERE id=?').get(commentId) as Row | undefined;
+    if (!row) throw new Error('Comment not found.');
+    if (actor.role !== 'admin' && row.user_id !== actor.id) throw new Error('Not allowed to delete this comment.');
+    this.db.prepare('DELETE FROM comments WHERE id=?').run(commentId);
+  }
+  reviewIssue(issueId: number, status: 'reference' | 'unreviewed') {
+    const result = this.db.prepare('UPDATE issues SET review_status=? WHERE id=?').run(status, issueId);
+    if (!result.changes) throw new Error('Issue not found.');
+  }
+  deleteIssue(issueId: number) {
+    const result = this.db.prepare('DELETE FROM issues WHERE id=?').run(issueId);
+    if (!result.changes) throw new Error('Issue not found.');
+  }
   createChallenge(pageSlug: string) { const id = randomUUID(); const expiresAt = Date.now()+10*60_000; this.db.prepare('INSERT INTO challenges VALUES (?,?,?,0)').run(id,pageSlug,expiresAt); return { challenge: id, difficulty: '0000', expires_at: new Date(expiresAt).toISOString() }; }
   addComment(data: { page_slug: string; content: string; nonce: string; challenge: string; client_id: string }, user: User | null = null) {
     return this.transaction(() => {

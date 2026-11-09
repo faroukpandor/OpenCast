@@ -23,6 +23,9 @@ Copy `.env.example` to `.env`. The server validates configuration before opening
 | `ANALYTICS_SECRET` | Optional random secret, at least 32 characters. Otherwise generated and persisted in SQLite |
 | `ENABLE_SCRAPERS` | `true` or `false`; default false. An admin must still trigger ingestion |
 | `YOUTUBE_CHANNEL_IDS` | Up to five valid `UC...` IDs, comma-separated |
+| `REDDIT_ACCESS_APPROVED` | Default false. Set true only after obtaining Reddit permission; this is an operator attestation, not permission granted by the flag |
+| `OPERATOR_NAME` | Public operator name shown in the privacy notice (1–120 characters) |
+| `PRIVACY_CONTACT` | Public email address or HTTPS contact URL for privacy/data requests |
 
 Do not commit `.env`, database files, WAL files, or backups containing user data.
 
@@ -52,7 +55,7 @@ curl http://localhost:3000/health
 
 For public HTTPS use, set `APP_URL=https://cast.example.com`, `COOKIE_SECURE=true`, and the correct `TRUST_PROXY_HOPS` in `.env`. Put TLS in front; do not expose the plain HTTP port directly. If accessing locally via `127.0.0.1` instead of `localhost`, set `APP_URL=http://127.0.0.1:3000` so the origin check matches.
 
-The runtime image runs as `node`, contains no TypeScript runner, and stores data in the `opencast_data` volume. The image build prunes development dependencies after compiling both bundles. Docker itself was unavailable in the implementation sandbox, so the image/daemon deployment remains an operator verification item.
+The runtime image runs as `node`, contains no TypeScript runner, and stores data in the `opencast_data` volume. The image build prunes development dependencies after compiling both bundles. Run `npm run verify:container` on a Docker-capable host or in the included GitHub Actions `container` job. It builds and starts Compose, checks health, non-root UID, absence of `tsx`, backup creation, session/login persistence across restart, and graceful exit.
 
 ## Reverse proxy / Cloudflare Tunnel
 
@@ -65,7 +68,8 @@ Set `APP_URL` to the exact browser origin. Count only proxies you control when s
 - Use `npm run db:backup -- ./backups/opencast-YYYY-MM-DD.sqlite` to create a consistent `VACUUM INTO` snapshot and run `integrity_check` on the copy. It refuses to overwrite an existing destination. Do not copy only the main file while WAL activity is ongoing.
 - Back up the database and any explicitly configured analytics secret. Test restoration into a separate instance.
 - Sessions/challenges expire; analytics older than 30 days is purged at startup and hourly.
-- Accounts, comments, catalog entries, and shortcodes persist until explicitly removed. There is no account-deletion/moderation UI yet; operators must define a data-request process before public community use.
+- Accounts can change passwords, enable TOTP MFA, and delete themselves in Account settings. Deletion removes linked reports; anonymous reports require administrator moderation. Administrators can delete comments/issues, change review labels, and issue one-hour manual password-reset tokens. No email delivery service is implied.
+- Expired reset tokens and rate-limit windows are purged at startup/hourly. Used reset tokens are invalidated when any password reset/change succeeds. Backups still need an operator retention/deletion policy.
 - Browser caches and offline drafts are local to each browser. Clear site data to remove them.
 
 ## Health and shutdown
@@ -74,10 +78,11 @@ Set `APP_URL` to the exact browser origin. Count only proxies you control when s
 
 ## Release checklist
 
-1. Run checks, browser suites, and dependency audits on the release commit.
+1. Run checks, browser suites, HTTPS proxy verification (`npm run verify:https`), and dependency audits on the release commit.
 2. Build and smoke-test the container on a Docker-capable host.
 3. Verify HTTPS login, secure/HTTP-only cookie, logout, and cross-origin write rejection.
 4. Verify a real authorized Android USB device and cancellation on the target browser/OS.
 5. If enabling feeds, verify source terms and actual responses; failures must remain visible.
 6. Verify offline reload after one online visit, cached search, and queued-report sync.
-7. Test database backup restoration (`npm run db:backup`, then open the copy with `DATABASE_PATH` pointing at it) and publish an operator privacy/contact notice.
+7. Test database backup restoration (`npm run db:backup`, then open the copy with `DATABASE_PATH` pointing at it). Set `OPERATOR_NAME` and `PRIVACY_CONTACT`, review the in-app privacy notice, and enable GitHub private vulnerability reporting in repository settings if the advisory form is unavailable.
+8. Review `docs/HARDWARE_ACCEPTANCE.md` and record a physical-device pass before claiming WebUSB hardware certification.

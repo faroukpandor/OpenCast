@@ -1,0 +1,32 @@
+name: Live public feed probe
+on:
+  workflow_dispatch:
+    inputs:
+      youtube_channel_id:
+        description: Public YouTube channel ID (UC + 22 characters)
+        required: false
+        default: UC_x5XG1OV2P6uZZ5FSM9Ttw
+      reddit_access_approved:
+        description: Set true only after obtaining Reddit permission
+        type: boolean
+        default: false
+  schedule:
+    - cron: '17 6 * * 1'
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Probe real public feeds without writing production data
+        env:
+          YOUTUBE_CHANNEL_IDS: ${{ inputs.youtube_channel_id || vars.LIVE_YOUTUBE_CHANNEL_ID || 'UC_x5XG1OV2P6uZZ5FSM9Ttw' }}
+          REDDIT_ACCESS_APPROVED: ${{ inputs.reddit_access_approved || vars.REDDIT_ACCESS_APPROVED || 'false' }}
+        run: npm run probe:feeds

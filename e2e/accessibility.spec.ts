@@ -19,6 +19,10 @@ test('primary views and authentication dialog have no automatically detectable W
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).toHaveCount(0);
 
+  await page.goto('/#analytics');
+  await expect(page.getByRole('heading', { name: 'Privacy & audience insights' })).toBeVisible();
+  await scan('privacy notice and analytics');
+
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole('button', { name: 'Toggle navigation' }).click();
   await expect(page.getByRole('navigation', { name: 'Mobile navigation' })).toBeVisible();

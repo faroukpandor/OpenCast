@@ -44,9 +44,9 @@ Compose explicitly disables secure cookies for local HTTP. For public deployment
 | WebUSB ADB | Tango transport, device authorization, actual shell output, cancellation/timeouts | Supported Chromium + HTTPS/localhost + physical USB device; not wireless TCP or non-Android TVs |
 | APK inspector | Local chunked SHA-256, bounded ZIP/binary-manifest parsing, permissions, optional checksum comparison | Not malware scanning, signing-certificate verification, or remote installation |
 | Shortcodes | Persistent administrator-managed HTTPS links and `/s/:code` redirects | Deployment-specific, not universal Downloader codes |
-| Community reports | Cookie sessions, browser proof of work, single-use challenges, idempotent offline retries | Public text; no moderation workflow or legal compliance guarantee |
+| Community accounts/reports | Cookie sessions, TOTP MFA/recovery codes, manual admin password resets, account deletion, owner/admin moderation, PoW, persistent rate limits | Public text; no email delivery service or legal compliance guarantee |
 | Analytics | Explicit opt-in, minimized paths/referrers, daily keyed IP hashes, 30-day retention | Operator must configure proxy trust and publish an appropriate privacy notice |
-| Feed ingestion | Opt-in Reddit JSON / configured YouTube Atom, source attribution, deduplication, persistent failure cooldowns | Disabled by default; external availability/terms apply; live feeds not certified |
+| Feed ingestion | Configured YouTube Atom; Reddit JSON only after explicit operator access approval; attribution, deduplication, persistent cooldowns, live-probe workflow | Disabled by default; Reddit permission and external availability remain operator responsibilities |
 | PWA | Precached production shell/assets, cached public catalog, offline search and draft queue | Connect once first; live writes and USB require their respective connectivity/hardware |
 
 ## Verify
@@ -55,6 +55,8 @@ Compose explicitly disables secure cookies for local HTTP. For public deployment
 npm run check                 # source security guard, strict TypeScript, regression/API tests, client + server build
 npm run test:e2e              # development browser workflows
 npm run test:e2e:production   # production CSP, offline shell/search, icons, local hashing
+npm run verify:https          # real local TLS proxy, secure cookies, origin and proxy-hop checks
+npm run verify:container      # Docker/Compose build/run/persistence/graceful-stop acceptance
 npm run audit:dependencies    # production dependency audit
 npm audit                     # include development dependencies
 npm run db:backup -- ./backups/opencast.sqlite  # verified SQLite snapshot; refuses overwrite
@@ -62,7 +64,11 @@ npm run db:backup -- ./backups/opencast.sqlite  # verified SQLite snapshot; refu
 
 Linux browser tests use the free Chromium binary and libraries already installed from npm. `scripts/prepare-browser.ts` extracts the bundled libraries automatically; no `apt`, browser download CDN, or manual `LD_LIBRARY_PATH` setup is required. Tests use an isolated in-memory database.
 
-The automated suite does **not** emulate physical USB authorization or certify public feed availability. Docker configuration is provided; a Docker daemon was not available in the implementation sandbox. See [the audit and verification record](docs/AUDIT.md) for details.
+The automated suite does **not** emulate physical USB authorization. Use `docs/HARDWARE_ACCEPTANCE.md` on an authorized device. Docker acceptance runs in the free GitHub Actions `container` job; a scheduled/manual workflow probes real YouTube feeds without touching production data. See [the audit and verification record](docs/AUDIT.md) for exact evidence and remaining boundaries.
+
+## License
+
+MIT — see `LICENSE`. No paid AI service or required API key is used.
 
 ## Project layout
 

@@ -33,3 +33,14 @@ test('analytics is opt-in and mobile navigation has no horizontal overflow',asyn
   await page.getByRole('button',{ name:'Toggle navigation' }).click(); await page.getByRole('navigation',{ name:'Mobile navigation' }).getByRole('button',{ name:'APK inspector',exact:true }).click(); await expect(page.getByRole('heading',{ name:'APK inspector & package links' })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
+
+test('account settings expose MFA setup, password change, and confirmed deletion',async ({ page }) => {
+  const username=`settings_${Date.now()}`; const password='settings-test-password';
+  await page.goto('/'); await page.getByRole('button',{ name:'Sign in',exact:true }).click(); await page.getByRole('button',{ name:'Create an account',exact:true }).click();
+  await page.getByLabel('Username',{ exact:true }).fill(username); await page.getByLabel('Email',{ exact:true }).fill(`${username}@example.com`); await page.getByLabel('Password',{ exact:true }).fill(password); await page.getByRole('dialog').getByRole('button',{ name:'Create account',exact:true }).click();
+  await page.getByRole('button',{ name:'Account settings',exact:true }).click(); await expect(page.getByRole('dialog',{ name:'Account settings' })).toBeVisible();
+  await page.getByRole('button',{ name:'Set up authenticator',exact:true }).click(); await expect(page.getByLabel('Authenticator code',{ exact:true })).toBeVisible(); await expect(page.getByRole('link',{ name:'Open authenticator setup' })).toHaveAttribute('href',/^otpauth:\/\/totp\//);
+  await page.getByLabel('Current password',{ exact:true }).first().fill(password); await page.getByLabel('New password',{ exact:true }).fill('replacement-settings-password'); await page.getByRole('button',{ name:'Change password and sign out',exact:true }).click(); await expect(page.getByRole('dialog')).toHaveCount(0);
+  await page.getByRole('button',{ name:'Sign in',exact:true }).click(); await page.getByLabel('Username or email',{ exact:true }).fill(username); await page.getByLabel('Password',{ exact:true }).fill('replacement-settings-password'); await page.getByRole('dialog').getByRole('button',{ name:'Sign in',exact:true }).click();
+  await page.getByRole('button',{ name:'Account settings',exact:true }).click(); await page.getByLabel('Password',{ exact:true }).last().fill('replacement-settings-password'); await page.getByRole('checkbox',{ name:'I understand this permanently deletes my account and authored reports.' }).check(); await page.getByRole('button',{ name:'Delete my account',exact:true }).click(); await expect(page.getByRole('dialog')).toHaveCount(0); await expect(page.getByRole('button',{ name:'Sign in',exact:true })).toBeVisible();
+});
