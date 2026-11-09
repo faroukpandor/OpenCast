@@ -1,11 +1,5 @@
 name: Live public feed probe
 on:
-  push:
-    branches: [main, 'arena/**']
-    paths:
-      - '.github/workflows/live-feeds.yml'
-      - 'scripts/probe-feeds.ts'
-      - 'src/server/scraper_service.ts'
   workflow_dispatch:
     inputs:
       youtube_channel_id:

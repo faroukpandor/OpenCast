@@ -86,7 +86,7 @@ test('scraper surfaces unavailable and malformed sources without inventing repor
   const { store }=setup(t); let call=0;
   const scraper=new ScraperService(store,async () => { call++; return call===1 ? new Response('blocked',{ status:403 }) : new Response('not json'); });
   const results=await scraper.run([],true); assert.equal(results.length,2); assert.ok(results.every(r => r.status==='error' && r.ingested===0)); assert.equal(store.getIssues().filter(i => i.review_status==='unreviewed').length,0);
-  assert.match(JSON.parse(store.setting('last_scraper_run')!).results[0].message,/unavailable/);
+  assert.match(JSON.parse(store.setting('last_scraper_run')!).results[0].message,/HTTP 403/);
 });
 
 test('scraper cooldown persists, skips failing sources, and resets after a later success',async t => {
