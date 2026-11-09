@@ -1,5 +1,11 @@
 name: Live public feed probe
 on:
+  push:
+    branches: [main, 'arena/**']
+    paths:
+      - '.github/workflows/live-feeds.yml'
+      - 'scripts/probe-feeds.ts'
+      - 'src/server/scraper_service.ts'
   workflow_dispatch:
     inputs:
       youtube_channel_id:
@@ -19,8 +25,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
