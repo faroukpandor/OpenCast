@@ -77,7 +77,11 @@ export class ScraperService {
       return results;
     } finally { this.running = false; }
   }
-  private safeError(e: unknown) { return e instanceof Error && e.name === 'TimeoutError' ? 'Source timed out.' : 'Source unavailable or returned an invalid response.'; }
+  private safeError(e: unknown) {
+    if (e instanceof Error && e.name === 'TimeoutError') return 'Source timed out.';
+    if (e instanceof Error && /^HTTP \d{3}$/.test(e.message)) return `Source returned ${e.message}.`;
+    return 'Source unavailable or returned an invalid response.';
+  }
   private async get(url: string) {
     const response = await this.fetcher(url, { signal: AbortSignal.timeout(12_000), redirect: 'error', headers: { 'User-Agent': 'OpenCast/2.2 (self-hosted feed reader)', Accept: 'application/json, application/atom+xml, application/xml' } });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
