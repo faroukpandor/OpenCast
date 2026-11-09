@@ -8,6 +8,10 @@ if (!channels.length) { console.error('Set YOUTUBE_CHANNEL_IDS to at least one p
 const store=new StreamingStore();
 try {
   const results=await new ScraperService(store).run(channels,redditApproved);
-  console.log(JSON.stringify({ at:new Date().toISOString(), results, issues_in_isolated_store:store.getIssues().filter(i => i.review_status==='unreviewed').length },null,2));
-  if (!results.some(r => r.source.startsWith('YouTube') && r.status==='ok') || results.some(r => r.status==='error')) process.exitCode=1;
+  const report={ at:new Date().toISOString(), results, issues_in_isolated_store:store.getIssues().filter(i => i.review_status==='unreviewed').length };
+  console.log(JSON.stringify(report,null,2));
+  const failed=!results.some(r => r.source.startsWith('YouTube') && r.status==='ok') || results.some(r => r.status==='error');
+  // GitHub exposes these annotations through the Checks API even when raw log storage is unreachable.
+  console.log(`::${failed ? 'error' : 'notice'} title=Live feed probe result::${JSON.stringify(report)}`);
+  if (failed) process.exitCode=1;
 } finally { store.close(); }
