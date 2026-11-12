@@ -1,31 +1,4 @@
-import { createHash } from 'node:crypto';
-
-/**
- * Anonymizes client IP address by hashing it with a daily rotating salt and server secret.
- * This guarantees GDPR compliance:
- * 1. Raw IP addresses are NEVER stored in the database.
- * 2. Hashes cannot be reversed (one-way SHA-256).
- * 3. Daily salt ensures cross-day tracking is mathematically impossible, while enabling
- *    accurate unique visitor counts within each 24-hour cycle.
- */
-export function hashDailyIp(
-  rawIp: string,
-  dateStr?: string,
-  serverSecret: string = 'streaming-intel-salt-2026'
-): string {
-  const date = dateStr || new Date().toISOString().split('T')[0];
-  const normalizedIp = (rawIp || '127.0.0.1').trim().replace(/:\d+$/, '');
-  const payload = `${normalizedIp}_${date}_${serverSecret}`;
-  return createHash('sha256').update(payload).digest('hex').substring(0, 16);
-}
-
-/**
- * Classifies device types from user agent strings into clean categories:
- * - Streaming Box / TV (FireTV, Android TV, Roku, AppleTV, Tizen, WebOS)
- * - Mobile (Android, iPhone)
- * - Tablet (iPad, Android Tablet)
- * - Desktop (Windows, Mac, Linux)
- */
+// Broad classification only. Raw user agents are never persisted.
 export function classifyDeviceType(userAgent?: string): 'Streaming Device' | 'Mobile' | 'Tablet' | 'Desktop' {
   if (!userAgent) return 'Desktop';
   const ua = userAgent.toLowerCase();

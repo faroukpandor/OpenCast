@@ -1,6 +1,6 @@
 {
-  "name": "Streaming Intel Hub",
-  "description": "Proprietary Streaming Intelligence Platform: A self-hosted, privacy-first alternative to AFTVnews for Fire TV, Google TV, and Roku devices with ADB solutions, zero-PII analytics, cryptographic anti-spam, and RAG knowledge base.",
+  "name": "OpenCast",
+  "description": "Free, self-hosted streaming intelligence: hardware references, WebUSB ADB, local APK inspection, community reports, and privacy-conscious analytics.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": []
 }

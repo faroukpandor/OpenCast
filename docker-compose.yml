@@ -1,26 +1,20 @@
-version: '3.8'
-
 services:
-  backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: streaming_intel_backend
+  opencast:
+    build: .
     restart: unless-stopped
-    ports:
-      - "8000:8000"
+    init: true
+    env_file: .env
     environment:
-      - DATABASE_PATH=/data/streaming_intel.db
-      - ENVIRONMENT=production
-      - DAILY_SALT_SECRET=streaming-intel-salt-2026-production
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_PATH: /app/data/opencast.sqlite
+      # This compose file binds to loopback for local HTTP. Override both for HTTPS deployment.
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      APP_URL: ${APP_URL:-http://localhost:3000}
+    ports:
+      - "127.0.0.1:3000:3000"
     volumes:
-      - sqlite_data:/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
+      - opencast_data:/app/data
+    stop_grace_period: 15s
 volumes:
-  sqlite_data:
-    driver: local
+  opencast_data:

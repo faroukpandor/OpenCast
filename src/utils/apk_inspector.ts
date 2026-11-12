@@ -1,151 +1,96 @@
+import { unzipSync } from 'fflate';
+import { sha256 } from '@noble/hashes/sha2.js';
+import { bytesToHex } from '@noble/hashes/utils.js';
+export const MAX_APK_BYTES = 150 * 1024 * 1024;
 export interface ApkSecurityReport {
-  fileName: string;
-  fileSize: number;
-  computedSha256: string;
-  isOfficialMatch: boolean;
-  officialMatchName?: string;
-  targetSdk?: number;
-  minSdk?: number;
-  suspiciousFlags: string[];
+  fileName: string; fileSize: number; computedSha256: string; packageName?: string; versionName?: string;
+  targetSdk?: number; minSdk?: number; flags: string[];
   permissions: { name: string; isHighPrivilege: boolean; description: string }[];
+  checksumMatch: boolean | null; manifestParsed: boolean;
 }
-
-const KNOWN_SAFE_HASHES: Record<string, string> = {
-  'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855': 'Elephant TV Streaming Client v2.4.1 (Official)',
-  'a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0': 'SmartTube Beta v22.84 (Yuliskov Official)',
-  '9f8e7d6c5b4a3928170e9d8c7b6a543210fedcba0987654321abcdef12345678': 'Projectivy Launcher v4.5.2 (Spocky Official)'
+const privilegeNotes: Record<string,string> = {
+  REQUEST_INSTALL_PACKAGES: 'Can request installation of other packages.', SYSTEM_ALERT_WINDOW: 'Can draw over other apps.',
+  WRITE_SECURE_SETTINGS: 'Can change protected system settings; normally requires privileged access.',
+  BIND_ACCESSIBILITY_SERVICE: 'Accessibility services can observe screen content and actions.',
+  READ_SMS: 'Can read text messages.', SEND_SMS: 'Can send text messages.', READ_CONTACTS: 'Can read contacts.',
+  RECORD_AUDIO: 'Can record microphone audio.', ACCESS_FINE_LOCATION: 'Can request precise location.',
+  MANAGE_EXTERNAL_STORAGE: 'Can request broad shared-storage access.'
 };
-
-const HIGH_PRIVILEGE_PERMISSIONS: Record<string, string> = {
-  'android.permission.REQUEST_INSTALL_PACKAGES': 'Allows installing third-party APK packages without Play Store approval.',
-  'android.permission.SYSTEM_ALERT_WINDOW': 'Allows overlaying windows on top of any running application (required for Custom Launchers).',
-  'android.permission.WRITE_SECURE_SETTINGS': 'Allows modifying root Android system settings and display modes.',
-  'android.permission.RECEIVE_BOOT_COMPLETED': 'Launches application background service immediately upon TV power-on.',
-  'android.permission.BIND_ACCESSIBILITY_SERVICE': 'Interprets remote button events (Home button remap).'
-};
-
-/**
- * Pure synchronous SHA-256 for universal Node.js & browser compatibility.
- * Zero dependency, runs seamlessly in client-side Vite bundles and Node test suites.
- */
-export function computeSha256(input: Uint8Array | string): string {
-  function rightRotate(value: number, amount: number) {
-    return (value >>> amount) | (value << (32 - amount));
+export async function hashFile(file: Blob, onProgress?: (fraction: number) => void): Promise<string> {
+  const hasher = sha256.create();
+  // Stream in bounded chunks instead of allocating multiple copies of a large APK.
+  for (let offset = 0; offset < file.size; offset += 1024 * 1024) {
+    hasher.update(new Uint8Array(await file.slice(offset,offset+1024*1024).arrayBuffer()));
+    onProgress?.(Math.min(1,(offset+1024*1024)/file.size));
   }
-
-  const hash = [
-    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-    0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
-  ];
-
-  const k = [
-    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
-  ];
-
-  const bytes = typeof input === 'string' ? new TextEncoder().encode(input) : input;
-  const words: number[] = [];
-
-  for (let i = 0; i < bytes.length; i++) {
-    words[i >> 2] |= bytes[i] << ((3 - (i % 4)) * 8);
-  }
-  words[bytes.length >> 2] |= 0x80 << ((3 - (bytes.length % 4)) * 8);
-  words[(((bytes.length + 8) >> 6) + 1) * 16 - 1] = bytes.length * 8;
-
-  const w = new Array(64);
-  for (let i = 0; i < words.length; i += 16) {
-    let a = hash[0], b = hash[1], c = hash[2], d = hash[3];
-    let e = hash[4], f = hash[5], g = hash[6], h = hash[7];
-
-    for (let j = 0; j < 64; j++) {
-      if (j < 16) {
-        w[j] = words[i + j] | 0;
-      } else {
-        const s0 = rightRotate(w[j - 15], 7) ^ rightRotate(w[j - 15], 18) ^ (w[j - 15] >>> 3);
-        const s1 = rightRotate(w[j - 2], 17) ^ rightRotate(w[j - 2], 19) ^ (w[j - 2] >>> 10);
-        w[j] = (w[j - 16] + s0 + w[j - 7] + s1) | 0;
+  return bytesToHex(hasher.digest());
+}
+// Parse Android's binary XML string pool and start-element attributes, without executing APK code.
+export function parseBinaryManifest(bytes: Uint8Array) {
+  const view = new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);
+  if (bytes.length < 8 || view.getUint16(0,true) !== 0x0003) throw new Error('Not an Android binary manifest.');
+  const strings: string[] = []; const attributes: Record<string,Record<string,string>> = {};
+  let packageName: string | undefined; let versionName: string | undefined; let minSdk: number | undefined; let targetSdk: number | undefined; const permissions: string[] = [];
+  const u16 = (o: number) => { if (o+2 > bytes.length) throw new Error('Truncated manifest.'); return view.getUint16(o,true); };
+  const u32 = (o: number) => { if (o+4 > bytes.length) throw new Error('Truncated manifest.'); return view.getUint32(o,true); };
+  const str = (index: number) => index === 0xffffffff ? '' : strings[index] || '';
+  for (let offset = 8; offset < bytes.length;) {
+    const type = u16(offset); const headerSize = u16(offset+2); const size = u32(offset+4);
+    if (headerSize < 8 || size < headerSize || offset+size > bytes.length) throw new Error('Invalid manifest chunk.');
+    if (type === 1) {
+      const count = u32(offset+8); const flags = u32(offset+16); const dataStart = u32(offset+20); const utf8 = !!(flags & 0x100);
+      if (count > 100000 || headerSize < 28 || dataStart < headerSize+count*4 || dataStart >= size) throw new Error('Invalid manifest string pool.');
+      for (let i=0;i<count;i++) {
+        const stringOffset=u32(offset+headerSize+i*4); const pos=offset+dataStart+stringOffset;
+        if (stringOffset >= size-dataStart || pos >= offset+size) throw new Error('String offset outside manifest.');
+        if (utf8) {
+          let n = bytes[pos]; let p = pos+1; if (n & 0x80) { if(p >= offset+size) throw new Error('Truncated string length.'); n = ((n & 0x7f)<<8) | bytes[p++]; }
+          if(p >= offset+size) throw new Error('Truncated string length.'); let length = bytes[p++]; if (length & 0x80) { if(p >= offset+size) throw new Error('Truncated string length.'); length = ((length & 0x7f)<<8) | bytes[p++]; }
+          if(p+length > offset+size) throw new Error('String exceeds manifest bounds.');
+          strings.push(new TextDecoder('utf-8',{ fatal:true }).decode(bytes.subarray(p,p+length)));
+        } else {
+          let length = u16(pos); let p = pos+2;
+          if (length & 0x8000) { length = ((length & 0x7fff)<<16) | u16(p); p += 2; }
+          if (length > 100000 || p+length*2 > offset+size) throw new Error('UTF-16 string exceeds manifest bounds.');
+          strings.push(new TextDecoder('utf-16le',{ fatal:true }).decode(bytes.subarray(p,p+length*2)));
+        }
       }
-
-      const s1 = rightRotate(e, 6) ^ rightRotate(e, 11) ^ rightRotate(e, 25);
-      const ch = (e & f) ^ (~e & g);
-      const temp1 = (h + s1 + ch + k[j] + w[j]) | 0;
-      const s0 = rightRotate(a, 2) ^ rightRotate(a, 13) ^ rightRotate(a, 22);
-      const maj = (a & b) ^ (a & c) ^ (b & c);
-      const temp2 = (s0 + maj) | 0;
-
-      h = g;
-      g = f;
-      f = e;
-      e = (d + temp1) | 0;
-      d = c;
-      c = b;
-      b = a;
-      a = (temp1 + temp2) | 0;
+    } else if (type === 0x0102) {
+      const ext = offset+headerSize; const name = str(u32(ext+4)); const attrStart = u16(ext+8); const attrSize = u16(ext+10) || 20; const count = u16(ext+12); if(attrStart < 16 || attrSize < 20 || attrStart+count*attrSize > size-headerSize) throw new Error('Invalid attribute bounds.');
+      const values: Record<string,string> = {};
+      for (let i=0;i<count;i++) {
+        const a = ext+attrStart+i*attrSize; if (a+20 > offset+size) throw new Error('Truncated attributes.');
+        const key = str(u32(a+4)); const raw = u32(a+8); const dataType = bytes[a+15]; const data = u32(a+16);
+        const value = dataType === 3 ? str(raw) : dataType === 0x10 ? String(data) : raw !== 0xffffffff ? str(raw) : String(data);
+        values[key] = value;
+        if (name === 'manifest' && key === 'package') packageName = value;
+        if (name === 'manifest' && key === 'versionName') versionName = value;
+        if (name === 'uses-permission' && key === 'name') permissions.push(value);
+        if (name === 'uses-sdk' && key === 'minSdkVersion') minSdk = Number(value);
+        if (name === 'uses-sdk' && key === 'targetSdkVersion') targetSdk = Number(value);
+      }
+      attributes[name] = values;
     }
-
-    hash[0] = (hash[0] + a) | 0;
-    hash[1] = (hash[1] + b) | 0;
-    hash[2] = (hash[2] + c) | 0;
-    hash[3] = (hash[3] + d) | 0;
-    hash[4] = (hash[4] + e) | 0;
-    hash[5] = (hash[5] + f) | 0;
-    hash[6] = (hash[6] + g) | 0;
-    hash[7] = (hash[7] + h) | 0;
+    offset += size;
   }
-
-  let result = '';
-  for (let i = 0; i < 8; i++) {
-    for (let j = 3; j >= 0; j--) {
-      const b = (hash[i] >> (j * 8)) & 255;
-      result += (b < 16 ? '0' : '') + b.toString(16);
-    }
-  }
-  return result;
+  return { packageName, versionName, minSdk, targetSdk, permissions: [...new Set(permissions)], attributes };
 }
-
-/**
- * Inspects APK metadata and verifies cryptographic hash.
- */
-export function analyzeApkSignature(
-  fileName: string,
-  fileSize: number,
-  hash: string,
-  declaredPermissions: string[] = []
-): ApkSecurityReport {
-  const normalizedHash = hash.toLowerCase().trim();
-  const officialName = KNOWN_SAFE_HASHES[normalizedHash];
-
-  const permissions = declaredPermissions.map(perm => ({
-    name: perm,
-    isHighPrivilege: perm in HIGH_PRIVILEGE_PERMISSIONS,
-    description: HIGH_PRIVILEGE_PERMISSIONS[perm] || 'Standard Android application permission.'
-  }));
-
-  const suspiciousFlags: string[] = [];
-
-  if (fileSize > 150 * 1024 * 1024) {
-    suspiciousFlags.push('Unusually large APK size (>150MB) for a streaming utility.');
-  }
-  if (declaredPermissions.includes('android.permission.SEND_SMS')) {
-    suspiciousFlags.push('High Danger: SMS permission found in streaming TV APK.');
-  }
-  if (declaredPermissions.includes('android.permission.RECORD_AUDIO') && !fileName.toLowerCase().includes('remote')) {
-    suspiciousFlags.push('Audio recording permission declared without voice search context.');
-  }
-
-  return {
-    fileName,
-    fileSize,
-    computedSha256: normalizedHash,
-    isOfficialMatch: !!officialName,
-    officialMatchName: officialName,
-    suspiciousFlags,
-    permissions
-  };
+export async function inspectApk(file: File, expectedHash = '', onProgress?: (n: number) => void): Promise<ApkSecurityReport> {
+  const expected = expectedHash.trim().toLowerCase();
+  if (expected && !/^[a-f0-9]{64}$/.test(expected)) throw new Error('Expected SHA-256 must contain exactly 64 hexadecimal characters.');
+  if (!file.size || file.size > MAX_APK_BYTES) throw new Error('Choose a non-empty APK no larger than 150 MB.');
+  if (!file.name.toLowerCase().endsWith('.apk')) throw new Error('Choose an .apk file.');
+  const computedSha256 = await hashFile(file,onProgress);
+  let manifest: ReturnType<typeof parseBinaryManifest> | undefined; let manifestParsed = false; const flags: string[] = [];
+  try {
+    const archive = unzipSync(new Uint8Array(await file.arrayBuffer()),{ filter: f => f.name === 'AndroidManifest.xml' && f.originalSize <= 2*1024*1024 && f.size <= 2*1024*1024 });
+    if (!archive['AndroidManifest.xml'] || archive['AndroidManifest.xml'].length > 2*1024*1024) throw new Error('Missing or oversized AndroidManifest.xml.');
+    manifest = parseBinaryManifest(archive['AndroidManifest.xml']); manifestParsed = true;
+  } catch { flags.push('Could not read a valid Android manifest. This may not be a valid APK.'); }
+  const checksumMatch = expected ? expected === computedSha256 : null;
+  if (checksumMatch === false) flags.push('Checksum does not match the expected publisher checksum. Do not install this file.');
+  if (!expected) flags.push('No publisher checksum supplied. A checksum alone does not establish trust.');
+  const permissions = (manifest?.permissions || []).map(name => { const short = name.split('.').pop() || name; return { name, isHighPrivilege: short in privilegeNotes, description: privilegeNotes[short] || 'Standard or custom Android permission.' }; });
+  for (const p of permissions.filter(p => p.isHighPrivilege)) flags.push(`Review sensitive permission: ${p.name}.`);
+  return { fileName: file.name, fileSize: file.size, computedSha256, packageName: manifest?.packageName, versionName: manifest?.versionName, minSdk: manifest?.minSdk, targetSdk: manifest?.targetSdk, permissions, flags, checksumMatch, manifestParsed };
 }

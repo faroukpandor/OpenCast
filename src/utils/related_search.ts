@@ -36,13 +36,13 @@ export function extractKeywords(text: string): string[] {
  */
 export function findRelatedIssues(
   targetIssue: IssueRecord,
-  allIssues: IssueRecord[],
+  allIssues: (IssueRecord & Record<string, any>)[],
   limit: number = 5
-): Array<IssueRecord & { score: number; matchedKeywords: string[] }> {
+): Array<IssueRecord & Record<string, any> & { score: number; matchedKeywords: string[] }> {
   const targetKeywords = extractKeywords(`${targetIssue.title} ${targetIssue.description}`);
   if (targetKeywords.length === 0) return [];
 
-  const results: Array<IssueRecord & { score: number; matchedKeywords: string[] }> = [];
+  const results: Array<IssueRecord & Record<string, any> & { score: number; matchedKeywords: string[] }> = [];
 
   for (const candidate of allIssues) {
     if (candidate.id === targetIssue.id) continue;
@@ -96,9 +96,9 @@ export function findRelatedIssues(
  */
 export function searchIssuesByQuery(
   query: string,
-  allIssues: IssueRecord[],
+  allIssues: (IssueRecord & Record<string, any>)[],
   limit: number = 5
-): Array<IssueRecord & { score: number; matchedKeywords: string[] }> {
+): Array<IssueRecord & Record<string, any> & { score: number; matchedKeywords: string[] }> {
   return findRelatedIssues({
     id: -1,
     device_id: 0,

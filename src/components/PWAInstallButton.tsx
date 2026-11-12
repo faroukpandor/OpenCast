@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
 import { usePWAInstall } from '../utils/usePWAInstall.ts';
 import { Download, Share, X, Smartphone } from 'lucide-react';
+import { Modal } from './Modal.tsx';
 
 export const PWAInstallButton: React.FC = () => {
   const { isInstallable, isInstalled, isIOS, install } = usePWAInstall();
   const [showIOSGuide, setShowIOSGuide] = useState(false);
+  const [showGuide, setShowGuide] = useState(false);
 
   // If already installed and running standalone, suppress button
   if (isInstalled) {
@@ -36,43 +38,11 @@ export const PWAInstallButton: React.FC = () => {
           Install on iOS
         </button>
 
-        {showIOSGuide && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <div className="w-full max-w-sm rounded-2xl bg-white dark:bg-slate-900 p-6 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4">
-              <div className="flex items-center justify-between">
-                <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                  <Share className="w-4 h-4 text-blue-500" />
-                  Install on iPhone / iPad
-                </h3>
-                <button
-                  onClick={() => setShowIOSGuide(false)}
-                  className="p-1 rounded-lg text-slate-400 hover:text-slate-600"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-
-              <div className="space-y-3 text-xs text-slate-600 dark:text-slate-300">
-                <p>
-                  1. Tap the <strong>Share</strong> button in Safari's bottom toolbar.
-                </p>
-                <p>
-                  2. Scroll down the menu and select <strong>Add to Home Screen</strong>.
-                </p>
-                <p>
-                  3. Tap <strong>Add</strong> in the top right to access full offline ADB guides.
-                </p>
-              </div>
-
-              <button
-                onClick={() => setShowIOSGuide(false)}
-                className="w-full py-2 text-xs font-semibold rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 hover:bg-slate-200 transition-colors"
-              >
-                Got It
-              </button>
-            </div>
-          </div>
-        )}
+        {showIOSGuide && <Modal label="Install on iPhone or iPad" onClose={() => setShowIOSGuide(false)}>
+          <div className="flex items-center justify-between mb-4"><h2 className="section-title flex items-center gap-2"><Share size={18}/>Install on iPhone / iPad</h2><button className="icon-button" aria-label="Close install guide" onClick={() => setShowIOSGuide(false)}><X size={18}/></button></div>
+          <ol className="list-decimal list-inside space-y-3 text-sm muted"><li>Tap Share in Safari's toolbar.</li><li>Select Add to Home Screen.</li><li>Tap Add. Open the app once online to cache the reference catalog.</li></ol>
+          <p className="text-xs muted mt-4">Offline references are available after caching. WebUSB ADB is not supported by iOS Safari.</p><button className="primary-button mt-5" onClick={() => setShowIOSGuide(false)}>Got it</button>
+        </Modal>}
       </>
     );
   }
@@ -80,12 +50,13 @@ export const PWAInstallButton: React.FC = () => {
   // Fallback desktop install affordance
   return (
     <button
-      onClick={() => alert("To install this offline PWA, use Chrome or Edge and click the install icon in your address bar, or tap 'Add to Home Screen' on Android/iOS.")}
+      onClick={() => setShowGuide(true)}
       className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap"
       title="PWA Offline Capable"
     >
       <Download className="w-3.5 h-3.5 text-slate-400" />
       Install PWA
+      {showGuide && <span role="status" className="fixed right-4 top-20 z-50 max-w-sm rounded-xl border border-slate-300 bg-white dark:bg-slate-900 p-4 shadow-xl text-left">Use your browser’s Install app or Add to Home Screen menu. If unavailable, open this site directly over HTTPS in a supported browser.</span>}
     </button>
   );
 };
